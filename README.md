@@ -1,6 +1,6 @@
 # Spring Boot Gemini Demo
 
-This is a demo project for using Spring Boot with Google's Gemini Pro model.
+This is a demo project for using Spring Boot, along with Spring AI that uses Google's Gemini Pro model.
 
 ## Prerequisites
 
@@ -68,3 +68,14 @@ gcloud app deploy
 ```
 
 Before deploying, make sure you have authenticated with the Google Cloud SDK and have set the correct project.
+
+
+A version of deployed application on App Engine can be accessed [here](https://mbcc-test.appspot.com/)
+
+## References
+
+* Spring AI: https://docs.spring.io/spring-ai/reference/index.html
+
+
+Google Cloud credits are provided for this project #AISprint
+
