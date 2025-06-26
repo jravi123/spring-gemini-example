@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Personal Travel Agent</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts - Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Custom styles for the spinner and general font */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
+        }
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+        /* Basic prose styling for Gemini's output */
+        .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+            font-weight: bold;
+            margin-top: 1.5em;
+            margin-bottom: 0.5em;
+        }
+        .prose h2 { font-size: 1.5em; }
+        .prose h3 { font-size: 1.25em; }
+        .prose p {
+            margin-bottom: 1em;
+        }
+        .prose ul, .prose ol {
+            list-style-position: inside;
+            margin-left: 1.5em;
+            margin-bottom: 1em;
+        }
+        .prose ul { list-style-type: disc; }
+        .prose ol { list-style-type: decimal; }
+        .prose li {
+            margin-bottom: 0.5em;
+        }
+        /* Style for the chat history container to allow scrolling */
+        #chatHistoryDisplay {
+            max-height: 300px; /* Limit height */
+            overflow-y: auto;  /* Enable vertical scrolling */
+            border: 1px solid #e0e0e0;
+            padding: 1rem;
+            border-radius: 0.75rem;
+            background-color: #f9fafb;
+            margin-bottom: 1rem;
+        }
+        #chatHistoryDisplay div {
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        #chatHistoryDisplay div:last-child {
+            border-bottom: none;
+        }
+    </style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-blue-100 to-purple-100 p-4 flex items-center justify-center">
+    <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-4xl border border-gray-200">
+        <h1 class="text-4xl font-bold text-center text-gray-800 mb-8">
+            Your Personal Travel Agent ✈️
+        </h1>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <!-- Input for Destination -->
+            <div class="relative">
+                <label for="destination" class="block text-gray-700 text-sm font-semibold mb-2">
+                    Preferred Destination (e.g., Paris, Japan, Beach vacation)
+                </label>
+                <input
+                    type="text"
+                    id="destination"
+                    placeholder="Optional: leave blank for open suggestions"
+                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-200"
+                />
+            </div>
+
+            <!-- Input for Dates/Duration -->
+            <div class="relative">
+                <label for="dates" class="block text-gray-700 text-sm font-semibold mb-2">
+                    Travel Dates/Duration (e.g., 2 weeks in August, long weekend)
+                </label>
+                <input
+                    type="text"
+                    id="dates"
+                    placeholder="Optional: flexible"
+                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-200"
+                />
+            </div>
+
+            <!-- Input for Interests -->
+            <div class="relative">
+                <label for="interests" class="block text-gray-700 text-sm font-semibold mb-2">
+                    Interests (e.g., hiking, history, food, relaxation, nightlife)
+                </label>
+                <input
+                    type="text"
+                    id="interests"
+                    placeholder="e.g., historical sites, nature, adventure"
+                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-200"
+                />
+            </div>
+
+            <!-- Input for Budget -->
+            <div class="relative">
+                <label for="budget" class="block text-gray-700 text-sm font-semibold mb-2">
+                    Budget (e.g., budget-friendly, moderate, luxury)
+                </label>
+                <input
+                    type="text"
+                    id="budget"
+                    placeholder="e.g., budget, mid-range, high-end"
+                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-200"
+                />
+            </div>
+        </div>
+
+        <!-- Generate Suggestions Button -->
+        <div class="text-center mb-8">
+            <button
+                id="generateBtn"
+                class="px-8 py-3 rounded-full text-white font-semibold text-lg transition duration-300 ease-in-out bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 shadow-lg hover:shadow-xl transform hover:scale-105"
+            >
+                Get Travel Suggestions
+            </button>
+        </div>
+
+        <!-- Display Area for Suggestions or Error -->
+        <div id="errorDisplay" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg relative mb-6" role="alert">
+            <strong class="font-bold">Error:</strong>
+            <span id="errorMessage" class="block sm:inline ml-2"></span>
+        </div>
+
+        <div id="suggestionsDisplay" class="hidden mt-8 bg-blue-50 p-6 rounded-xl border border-blue-200 shadow-inner">
+            <h2 class="text-2xl font-bold text-gray-700 mb-4">Your Personalized Travel Plan:</h2>
+            <div id="suggestionsContent" class="prose max-w-none text-gray-800 leading-relaxed"></div>
+        </div>
+
+        <!-- Chat Interface (Initially hidden) -->
+        <div id="chatContainer" class="hidden mt-8 p-6 bg-gray-50 rounded-xl border border-gray-200 shadow-inner">
+            <h2 class="text-2xl font-bold text-gray-700 mb-4">Chat with your Travel Agent:</h2>
+            <div id="chatHistoryDisplay" class="mb-4">
+                <!-- Chat messages will appear here -->
+            </div>
+            <div class="flex gap-2">
+                <input
+                    type="text"
+                    id="chatInput"
+                    placeholder="Ask a follow-up question..."
+                    class="flex-grow px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-200"
+                />
+                <button
+                    id="sendChatBtn"
+                    class="px-4 py-2 rounded-lg text-white font-semibold bg-blue-500 hover:bg-blue-600 transition duration-200 flex items-center justify-center"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M13 5l7 7-7 7M5 12h14" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Get references to HTML elements
+        const destinationInput = document.getElementById('destination');
+        const datesInput = document.getElementById('dates');
+        const interestsInput = document.getElementById('interests');
+        const budgetInput = document.getElementById('budget');
+        const generateBtn = document.getElementById('generateBtn');
+        const suggestionsDisplay = document.getElementById('suggestionsDisplay');
+        const suggestionsContent = document.getElementById('suggestionsContent');
+        const errorDisplay = document.getElementById('errorDisplay');
+        const errorMessage = document.getElementById('errorMessage');
+
+        // New elements for chat
+        const chatContainer = document.getElementById('chatContainer');
+        const chatInput = document.getElementById('chatInput');
+        const sendChatBtn = document.getElementById('sendChatBtn');
+        const chatHistoryDisplay = document.getElementById('chatHistoryDisplay');
+
+        // Global variable to store chat history for context
+        let chatHistory = [];
+
+        /**
+         * Shows the loading state for the main generate button.
+         */
+        function showLoading() {
+            generateBtn.disabled = true;
+            generateBtn.classList.add('bg-gray-400', 'cursor-not-allowed', '!from-gray-400', '!to-gray-400');
+            generateBtn.classList.remove('hover:from-blue-600', 'hover:to-purple-700', 'shadow-lg', 'hover:shadow-xl', 'transform', 'hover:scale-105');
+
+            // Add spinner and text
+            generateBtn.innerHTML = `
+                <span class="flex items-center justify-center">
+                    <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Generating...
+                </span>
+            `;
+        }
+
+        /**
+         * Hides the loading state for the main generate button.
+         */
+        function hideLoading() {
+            generateBtn.disabled = false;
+            generateBtn.classList.remove('bg-gray-400', 'cursor-not-allowed', '!from-gray-400', '!to-gray-400');
+            generateBtn.classList.add('hover:from-blue-600', 'hover:to-purple-700', 'shadow-lg', 'hover:shadow-xl', 'transform', 'hover:scale-105');
+            generateBtn.textContent = 'Get Travel Suggestions'; // Reset button text
+        }
+
+        /**
+         * Shows the loading state for the chat send button.
+         */
+        function showChatLoading() {
+            sendChatBtn.disabled = true;
+            sendChatBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
+            sendChatBtn.classList.remove('hover:bg-blue-600');
+            sendChatBtn.innerHTML = `
+                <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            `;
+        }
+
+        /**
+         * Hides the loading state for the chat send button.
+         */
+        function hideChatLoading() {
+            sendChatBtn.disabled = false;
+            sendChatBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
+            sendChatBtn.classList.add('hover:bg-blue-600');
+            sendChatBtn.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 5l7 7-7 7M5 12h14" />
+                </svg>
+            `; // Send icon
+        }
+
+
+        /**
+         * Displays an error message to the user.
+         * @param {string} message - The error message to display.
+         */
+        function displayError(message) {
+            errorDisplay.classList.remove('hidden');
+            errorMessage.textContent = message;
+            suggestionsDisplay.classList.add('hidden'); // Hide suggestions if error occurs
+            chatContainer.classList.add('hidden'); // Hide chat if error occurs during initial generation
+        }
+
+        /**
+         * Clears any displayed error messages.
+         */
+        function clearError() {
+            errorDisplay.classList.add('hidden');
+            errorMessage.textContent = '';
+        }
+
+        /**
+         * Helper function to append messages to the chat history display.
+         * @param {string} sender - The sender of the message (e.g., 'You', 'Travel Agent').
+         * @param {string} message - The message content.
+         * @param {string} colorClass - Tailwind CSS class for sender's name color.
+         */
+        function appendMessageToChat(sender, message, colorClass) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('mb-2', 'last:mb-0'); // Add spacing, remove on last
+
+            let formattedMessage = message.replace(/\n/g, '<br />'); // Preserve newlines
+
+            // Apply basic markdown for chat responses too
+            formattedMessage = formattedMessage.replace(/^###### (.*$)/gim, '<h6>$1</h6>');
+            formattedMessage = formattedMessage.replace(/^##### (.*$)/gim, '<h5>$1</h5>');
+            formattedMessage = formattedMessage.replace(/^#### (.*$)/gim, '<h4>$1</h4>');
+            formattedMessage = formattedMessage.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+            formattedMessage = formattedMessage.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+            formattedMessage = formattedMessage.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+            
+            messageElement.innerHTML = `<strong class="${colorClass}">${sender}:</strong> ${formattedMessage}`;
+            chatHistoryDisplay.appendChild(messageElement);
+            chatHistoryDisplay.scrollTop = chatHistoryDisplay.scrollHeight; // Scroll to bottom
+        }
+
+        /**
+         * Handles the generation of initial travel suggestions by calling the Gemini API.
+         */
+        async function generateSuggestions() {
+            // Clear previous suggestions, chat history, and errors
+            suggestionsContent.innerHTML = '';
+            suggestionsDisplay.classList.add('hidden');
+            chatContainer.classList.add('hidden');
+            chatHistoryDisplay.innerHTML = ''; // Clear chat history
+            clearError();
+            showLoading(); // Show loading indicator
+
+            // Get current values from input fields
+            const destination = destinationInput.value;
+            const dates = datesInput.value;
+            const interests = interestsInput.value;
+            const budget = budgetInput.value;
+
+            // Construct the initial prompt for the Gemini API
+            const promptText = `Act as a helpful travel agent. I am planning a trip.
+            Destination preference: ${destination || 'anywhere interesting'}
+            Travel dates/duration: ${dates || 'flexible'}
+            Interests: ${interests || 'general sightseeing'}
+            Budget: ${budget || 'moderate'}
+
+            Please provide a detailed travel suggestion, including:
+            1. A suggested destination (if not specified or if you have a better idea).
+            2. Reasons why it's a good fit based on my preferences.
+            3. A few key activities or attractions.
+            4. A brief note on typical costs or budget considerations.
+            5. Any specific tips for this destination.
+            Please format the response clearly with headings for each section. Use Markdown for headings (e.g., # Section Title).`;
+
+            // Initialize chat history with the user's initial prompt
+            chatHistory = [{ role: "user", parts: [{ text: promptText }] }];
+
+            const payload = { contents: chatHistory };
+
+            try {
+                const response = await fetch('/ai/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`API error: ${response.status} - ${errorText || 'Unknown error'}`);
+                }
+
+                const text = await response.text();
+
+                if (text) {
+                    let responseText = text;
+                    // Apply basic Markdown to HTML conversion for main suggestion
+                    responseText = responseText.replace(/^###### (.*$)/gim, '<h6>$1</h6>');
+                    responseText = responseText.replace(/^##### (.*$)/gim, '<h5>$1</h5>');
+                    responseText = responseText.replace(/^#### (.*$)/gim, '<h4>$1</h4>');
+                    responseText = responseText.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+                    responseText = responseText.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+                    responseText = responseText.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+                    responseText = responseText.replace(/\n/g, '<br />'); // Convert newlines to breaks
+
+                    suggestionsContent.innerHTML = responseText; // Update content with suggestions
+                    suggestionsDisplay.classList.remove('hidden'); // Show suggestions div
+                    chatContainer.classList.remove('hidden'); // Show chat interface
+
+                    // Add Gemini's initial response to chat history for context
+                    chatHistory.push({ role: "model", parts: [{ text: text }] });
+
+                } else {
+                    displayError("No suggestions received. Please try again.");
+                }
+            } catch (err) {
+                console.error("Error generating suggestions:", err);
+                displayError(`Failed to generate suggestions: ${err.message}. Please check your input and try again.`);
+            } finally {
+                hideLoading(); // Hide loading indicator
+            }
+        }
+
+        /**
+         * Handles sending conversational messages and getting responses from Gemini.
+         */
+        async function sendConversationMessage() {
+            const userMessage = chatInput.value.trim();
+            if (!userMessage) return; // Don't send empty messages
+
+            chatInput.value = ''; // Clear input field
+
+            // Add user's message to chat history and display it
+            chatHistory.push({ role: "user", parts: [{ text: userMessage }] });
+            appendMessageToChat('You', userMessage, 'text-blue-700');
+
+            showChatLoading(); // Show loading indicator for chat button
+
+            const payload = { contents: chatHistory };
+
+            try {
+                const response = await fetch('/ai/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`API error: ${response.status} - ${errorText || 'Unknown error'}`);
+                }
+
+                const text = await response.text();
+
+                if (text) {
+                    let geminiResponse = text;
+                    // Add Gemini's response to chat history
+                    chatHistory.push({ role: "model", parts: [{ text: geminiResponse }] });
+                    appendMessageToChat('Travel Agent', geminiResponse, 'text-green-700');
+                } else {
+                    appendMessageToChat('System', 'No response from AI.', 'text-red-500');
+                }
+            } catch (err) {
+                console.error("Error sending chat message:", err);
+                appendMessageToChat('System', `Error: ${err.message}`, 'text-red-500');
+            } finally {
+                hideChatLoading(); // Hide loading indicator
+            }
+        }
+
+        // Add event listeners
+        generateBtn.addEventListener('click', generateSuggestions);
+        sendChatBtn.addEventListener('click', sendConversationMessage);
+        chatInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendConversationMessage();
+            }
+        });
+    </script>
+</body>
+</html>
