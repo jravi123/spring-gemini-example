@@ -9,58 +9,8 @@
     <!-- Google Fonts - Inter -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-        /* Custom styles for the spinner and general font */
         body {
             font-family: 'Inter', sans-serif;
-        }
-        @keyframes spin {
-            from {
-                transform: rotate(0deg);
-            }
-            to {
-                transform: rotate(360deg);
-            }
-        }
-        .animate-spin {
-            animation: spin 1s linear infinite;
-        }
-        /* Basic prose styling for Gemini's output */
-        .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
-            font-weight: bold;
-            margin-top: 1.5em;
-            margin-bottom: 0.5em;
-        }
-        .prose h2 { font-size: 1.5em; }
-        .prose h3 { font-size: 1.25em; }
-        .prose p {
-            margin-bottom: 1em;
-        }
-        .prose ul, .prose ol {
-            list-style-position: inside;
-            margin-left: 1.5em;
-            margin-bottom: 1em;
-        }
-        .prose ul { list-style-type: disc; }
-        .prose ol { list-style-type: decimal; }
-        .prose li {
-            margin-bottom: 0.5em;
-        }
-        /* Style for the chat history container to allow scrolling */
-        #chatHistoryDisplay {
-            max-height: 300px; /* Limit height */
-            overflow-y: auto;  /* Enable vertical scrolling */
-            border: 1px solid #e0e0e0;
-            padding: 1rem;
-            border-radius: 0.75rem;
-            background-color: #f9fafb;
-            margin-bottom: 1rem;
-        }
-        #chatHistoryDisplay div {
-            padding: 0.5rem 0;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        #chatHistoryDisplay div:last-child {
-            border-bottom: none;
         }
     </style>
 </head>
@@ -192,152 +142,63 @@
         let chatHistory = [];
 
         /**
-         * Shows the loading state for the main generate button.
+         * Toggles the loading state for a button.
+         * @param {HTMLButtonElement} button - The button element to modify.
+         * @param {boolean} isLoading - Whether to show the loading state.
          */
-        function showLoading() {
-            generateBtn.disabled = true;
-            generateBtn.classList.add('bg-gray-400', 'cursor-not-allowed', '!from-gray-400', '!to-gray-400');
-            generateBtn.classList.remove('hover:from-blue-600', 'hover:to-purple-700', 'shadow-lg', 'hover:shadow-xl', 'transform', 'hover:scale-105');
-
-            // Add spinner and text
-            generateBtn.innerHTML = `
-                <span class="flex items-center justify-center">
-                    <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Generating...
-                </span>
-            `;
+        function toggleLoading(button, isLoading) {
+            button.disabled = isLoading;
+            if (isLoading) {
+                button.classList.add('opacity-50', 'cursor-not-allowed');
+                const spinner = '<svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" style="display: inline-block; vertical-align: middle;"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>';
+                if (button.id === 'generateBtn') {
+                    button.innerHTML = spinner + '<span style="vertical-align: middle; margin-left: 0.5rem;">Generating...</span>';
+                } else {
+                    button.innerHTML = spinner;
+                }
+            } else {
+                button.classList.remove('opacity-50', 'cursor-not-allowed');
+                button.innerHTML = button.dataset.originalHtml;
+            }
         }
-
-        /**
-         * Hides the loading state for the main generate button.
-         */
-        function hideLoading() {
-            generateBtn.disabled = false;
-            generateBtn.classList.remove('bg-gray-400', 'cursor-not-allowed', '!from-gray-400', '!to-gray-400');
-            generateBtn.classList.add('hover:from-blue-600', 'hover:to-purple-700', 'shadow-lg', 'hover:shadow-xl', 'transform', 'hover:scale-105');
-            generateBtn.textContent = 'Get Travel Suggestions'; // Reset button text
-        }
-
-        /**
-         * Shows the loading state for the chat send button.
-         */
-        function showChatLoading() {
-            sendChatBtn.disabled = true;
-            sendChatBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
-            sendChatBtn.classList.remove('hover:bg-blue-600');
-            sendChatBtn.innerHTML = `
-                <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-            `;
-        }
-
-        /**
-         * Hides the loading state for the chat send button.
-         */
-        function hideChatLoading() {
-            sendChatBtn.disabled = false;
-            sendChatBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
-            sendChatBtn.classList.add('hover:bg-blue-600');
-            sendChatBtn.innerHTML = `
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 5l7 7-7 7M5 12h14" />
-                </svg>
-            `; // Send icon
-        }
-
 
         /**
          * Displays an error message to the user.
          * @param {string} message - The error message to display.
          */
         function displayError(message) {
-            errorDisplay.classList.remove('hidden');
             errorMessage.textContent = message;
-            suggestionsDisplay.classList.add('hidden'); // Hide suggestions if error occurs
-            chatContainer.classList.add('hidden'); // Hide chat if error occurs during initial generation
+            errorDisplay.classList.toggle('hidden', !message);
         }
 
         /**
-         * Clears any displayed error messages.
-         */
-        function clearError() {
-            errorDisplay.classList.add('hidden');
-            errorMessage.textContent = '';
-        }
-
-        /**
-         * Helper function to append messages to the chat history display.
+         * Appends a message to the chat history display.
          * @param {string} sender - The sender of the message (e.g., 'You', 'Travel Agent').
          * @param {string} message - The message content.
-         * @param {string} colorClass - Tailwind CSS class for sender's name color.
+         * @param {string} colorClass - Tailwind CSS class for the sender's name color.
          */
         function appendMessageToChat(sender, message, colorClass) {
             const messageElement = document.createElement('div');
-            messageElement.classList.add('mb-2', 'last:mb-0'); // Add spacing, remove on last
-
-            let formattedMessage = message.replace(/\n/g, '<br />'); // Preserve newlines
-
-            // Apply basic markdown for chat responses too
-            formattedMessage = formattedMessage.replace(/^###### (.*$)/gim, '<h6>$1</h6>');
-            formattedMessage = formattedMessage.replace(/^##### (.*$)/gim, '<h5>$1</h5>');
-            formattedMessage = formattedMessage.replace(/^#### (.*$)/gim, '<h4>$1</h4>');
-            formattedMessage = formattedMessage.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-            formattedMessage = formattedMessage.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-            formattedMessage = formattedMessage.replace(/^# (.*$)/gim, '<h1>$1</h1>');
-            
-            messageElement.innerHTML = `<strong class="${colorClass}">${sender}:</strong> ${formattedMessage}`;
+            messageElement.classList.add('mb-2', 'last:mb-0');
+            messageElement.innerHTML = `<strong class="${colorClass}">${sender}:</strong> ${message}`;
             chatHistoryDisplay.appendChild(messageElement);
-            chatHistoryDisplay.scrollTop = chatHistoryDisplay.scrollHeight; // Scroll to bottom
+            chatHistoryDisplay.scrollTop = chatHistoryDisplay.scrollHeight;
         }
 
         /**
-         * Handles the generation of initial travel suggestions by calling the Gemini API.
+         * Handles all API calls to the backend.
+         * @param {Array} parts - The chat history to send to the backend.
+         * @param {HTMLButtonElement} button - The button that triggered the call.
          */
-        async function generateSuggestions() {
-            // Clear previous suggestions, chat history, and errors
-            suggestionsContent.innerHTML = '';
-            suggestionsDisplay.classList.add('hidden');
-            chatContainer.classList.add('hidden');
-            chatHistoryDisplay.innerHTML = ''; // Clear chat history
-            clearError();
-            showLoading(); // Show loading indicator
-
-            // Get current values from input fields
-            const destination = destinationInput.value;
-            const dates = datesInput.value;
-            const interests = interestsInput.value;
-            const budget = budgetInput.value;
-
-            // Construct the initial prompt for the Gemini API
-            const promptText = `Act as a helpful travel agent. I am planning a trip.
-            Destination preference: ${destination || 'anywhere interesting'}
-            Travel dates/duration: ${dates || 'flexible'}
-            Interests: ${interests || 'general sightseeing'}
-            Budget: ${budget || 'moderate'}
-
-            Please provide a detailed travel suggestion, including:
-            1. A suggested destination (if not specified or if you have a better idea).
-            2. Reasons why it's a good fit based on my preferences.
-            3. A few key activities or attractions.
-            4. A brief note on typical costs or budget considerations.
-            5. Any specific tips for this destination.
-            Please format the response clearly with headings for each section. Use Markdown for headings (e.g., # Section Title).`;
-
-            // Initialize chat history with the user's initial prompt
-            chatHistory = [{ role: "user", parts: [{ text: promptText }] }];
-
-            const payload = { contents: chatHistory };
+        async function callApi(parts, button) {
+            toggleLoading(button, true);
+            displayError(null);
 
             try {
                 const response = await fetch('/ai/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify({ parts })
                 });
 
                 if (!response.ok) {
@@ -347,88 +208,55 @@
 
                 const text = await response.text();
 
-                if (text) {
-                    let responseText = text;
-                    // Apply basic Markdown to HTML conversion for main suggestion
-                    responseText = responseText.replace(/^###### (.*$)/gim, '<h6>$1</h6>');
-                    responseText = responseText.replace(/^##### (.*$)/gim, '<h5>$1</h5>');
-                    responseText = responseText.replace(/^#### (.*$)/gim, '<h4>$1</h4>');
-                    responseText = responseText.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-                    responseText = responseText.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-                    responseText = responseText.replace(/^# (.*$)/gim, '<h1>$1</h1>');
-                    responseText = responseText.replace(/\n/g, '<br />'); // Convert newlines to breaks
-
-                    suggestionsContent.innerHTML = responseText; // Update content with suggestions
-                    suggestionsDisplay.classList.remove('hidden'); // Show suggestions div
-                    chatContainer.classList.remove('hidden'); // Show chat interface
-
-                    // Add Gemini's initial response to chat history for context
-                    chatHistory.push({ role: "model", parts: [{ text: text }] });
-
+                if (button.id === 'generateBtn') {
+                    suggestionsContent.innerHTML = text;
+                    suggestionsDisplay.classList.remove('hidden');
+                    chatContainer.classList.remove('hidden');
+                    chatHistory.push({ text });
                 } else {
-                    displayError("No suggestions received. Please try again.");
+                    appendMessageToChat('Travel Agent', text, 'text-green-700');
+                    chatHistory.push({ text });
                 }
             } catch (err) {
-                console.error("Error generating suggestions:", err);
-                displayError(`Failed to generate suggestions: ${err.message}. Please check your input and try again.`);
+                console.error("Error:", err);
+                displayError(`Failed to get response: ${err.message}. Please try again.`);
             } finally {
-                hideLoading(); // Hide loading indicator
+                toggleLoading(button, false);
             }
         }
 
-        /**
-         * Handles sending conversational messages and getting responses from Gemini.
-         */
-        async function sendConversationMessage() {
+        // Store original button HTML
+        generateBtn.dataset.originalHtml = generateBtn.innerHTML;
+        sendChatBtn.dataset.originalHtml = sendChatBtn.innerHTML;
+
+        // Event Listeners
+        generateBtn.addEventListener('click', () => {
+            const userPrompt = `
+                Please act as a personal travel agent. Here are my travel preferences:
+                - Destination: ${destinationInput.value || 'Open to suggestions'}
+                - Travel Dates/Duration: ${datesInput.value || 'Flexible'}
+                - Interests: ${interestsInput.value || 'General travel'}
+                - Budget: ${budgetInput.value || 'Not specified'}
+
+                Please provide a personalized travel plan based on these details.
+            `;
+            chatHistory = [{ text: userPrompt }];
+            callApi(chatHistory, generateBtn);
+        });
+
+        sendChatBtn.addEventListener('click', () => {
             const userMessage = chatInput.value.trim();
-            if (!userMessage) return; // Don't send empty messages
+            if (!userMessage) return;
 
-            chatInput.value = ''; // Clear input field
-
-            // Add user's message to chat history and display it
-            chatHistory.push({ role: "user", parts: [{ text: userMessage }] });
+            chatInput.value = '';
+            chatHistory.push({ text: userMessage });
             appendMessageToChat('You', userMessage, 'text-blue-700');
+            callApi(chatHistory, sendChatBtn);
+        });
 
-            showChatLoading(); // Show loading indicator for chat button
-
-            const payload = { contents: chatHistory };
-
-            try {
-                const response = await fetch('/ai/generate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`API error: ${response.status} - ${errorText || 'Unknown error'}`);
-                }
-
-                const text = await response.text();
-
-                if (text) {
-                    let geminiResponse = text;
-                    // Add Gemini's response to chat history
-                    chatHistory.push({ role: "model", parts: [{ text: geminiResponse }] });
-                    appendMessageToChat('Travel Agent', geminiResponse, 'text-green-700');
-                } else {
-                    appendMessageToChat('System', 'No response from AI.', 'text-red-500');
-                }
-            } catch (err) {
-                console.error("Error sending chat message:", err);
-                appendMessageToChat('System', `Error: ${err.message}`, 'text-red-500');
-            } finally {
-                hideChatLoading(); // Hide loading indicator
-            }
-        }
-
-        // Add event listeners
-        generateBtn.addEventListener('click', generateSuggestions);
-        sendChatBtn.addEventListener('click', sendConversationMessage);
-        chatInput.addEventListener('keypress', function(e) {
+        chatInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
-                sendConversationMessage();
+                sendChatBtn.click();
             }
         });
     </script>

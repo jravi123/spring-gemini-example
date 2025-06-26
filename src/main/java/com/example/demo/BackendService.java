@@ -1,42 +1,53 @@
 package com.example.demo;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.vertexai.gemini.VertexAiGeminiChatModel;
 import org.springframework.stereotype.Service;
 
+import com.example.demo.model.Part;
+import com.vladsch.flexmark.html.HtmlRenderer;
+import com.vladsch.flexmark.parser.Parser;
+import com.vladsch.flexmark.util.ast.Node;
+import com.vladsch.flexmark.util.data.MutableDataSet;
+
 @Service
 public class BackendService {
 
-    private final VertexAiGeminiChatModel chatModel;
+	private final VertexAiGeminiChatModel chatModel;
 
-    public BackendService(VertexAiGeminiChatModel chatModel) {
-        this.chatModel = chatModel;
-    }
+	private static final String SYSTEM_PROMPT = """
+			You are a friendly and knowledgeable personal travel agent.
+			A user is looking for travel suggestions.
+			Present the information in a clear, engaging, and well-structured format.
+			""";
 
-    @SuppressWarnings("unchecked")
-    public String getAiResponse(Map<String, Object> payload) {
-        List<Map<String, Object>> contents = (List<Map<String, Object>>) payload.get("contents");
-        List<Message> messages = contents.stream()
-            .map(entry -> {
-                String role = (String) entry.get("role");
-                String text = ((List<Map<String, String>>) entry.get("parts")).get(0).get("text");
-                if ("user".equalsIgnoreCase(role)) {
-                    return new UserMessage(text);
-                } else {
-                    return new AssistantMessage(text);
-                }
-            })
-            .collect(Collectors.toList());
+	public BackendService(VertexAiGeminiChatModel chatModel) {
+		this.chatModel = chatModel;
+	}
 
-        ChatResponse response = chatModel.call(new Prompt(messages));
-        return response.getResult().getOutput().getText();
-    }
+	public String getAiResponse(String userMessage, List<Part> conversationHistory) {
+		List<Message> messages = new ArrayList<>();
+		messages.add(new SystemMessage(SYSTEM_PROMPT));
+
+		// Add previous conversation history
+		messages.add(
+				new UserMessage(conversationHistory.stream().map(p -> p.getText()).collect(Collectors.joining("\n"))));
+
+		ChatResponse response = chatModel.call(new Prompt(messages));
+		String markdown = response.getResult().getOutput().getText();
+
+		MutableDataSet options = new MutableDataSet();
+		Parser parser = Parser.builder(options).build();
+		HtmlRenderer renderer = HtmlRenderer.builder(options).build();
+		Node document = parser.parse(markdown);
+		return renderer.render(document);
+	}
 }
