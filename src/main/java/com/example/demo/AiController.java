@@ -18,7 +18,6 @@ public class AiController {
 
     @PostMapping("/ai/generate")
     public String generate(@RequestBody ChatRequest chatRequest) {
-        // Extract the text from the last user message
         String userMessage = chatRequest.getParts().stream()
                 .map(p -> p.getText())
                 .collect(Collectors.joining("\n"));

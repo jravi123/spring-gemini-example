@@ -38,8 +38,11 @@ public class BackendService {
 		messages.add(new SystemMessage(SYSTEM_PROMPT));
 
 		// Add previous conversation history
-		messages.add(
-				new UserMessage(conversationHistory.stream().map(p -> p.getText()).collect(Collectors.joining("\n"))));
+        messages.add(
+                new UserMessage(conversationHistory.stream().map(p -> p.getText()).collect(Collectors.joining("\n"))));
+
+        // Add the latest user message
+        messages.add(new UserMessage(userMessage));
 
 		ChatResponse response = chatModel.call(new Prompt(messages));
 		String markdown = response.getResult().getOutput().getText();
