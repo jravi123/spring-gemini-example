@@ -2,7 +2,6 @@ package com.example.demo;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -12,8 +11,6 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.vertexai.gemini.VertexAiGeminiChatModel;
 import org.springframework.stereotype.Service;
 
-import com.example.demo.model.Part;
-
 @Service
 public class BackendService {
 
@@ -22,22 +19,18 @@ public class BackendService {
 	private static final String SYSTEM_PROMPT = """
 			You are a friendly and knowledgeable personal travel agent.
 			A user is looking for travel suggestions.
-			Present the information in a clear, engaging, and well-structured HTML format.
+			Present the information in a clear, engaging, and well-structured 
+			HTML string that can be inserted into div tag as innerHTML value.
 			""";
 
 	public BackendService(VertexAiGeminiChatModel chatModel) {
 		this.chatModel = chatModel;
 	}
 
-	public String getAiResponse(String userMessage, List<Part> conversationHistory) {
+	public String getAiResponse(String userMessage) {
 		List<Message> messages = new ArrayList<>();
 		messages.add(new SystemMessage(SYSTEM_PROMPT));
 
-		// Add previous conversation history
-		messages.add(
-				new UserMessage(conversationHistory.stream().map(p -> p.getText()).collect(Collectors.joining("\n"))));
-
-		// Add the latest user message
 		messages.add(new UserMessage(userMessage));
 
 		ChatResponse response = chatModel.call(new Prompt(messages));

@@ -1,12 +1,10 @@
 package com.example.demo;
 
-import java.util.stream.Collectors;
+import java.util.List;
 
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
-
-import com.example.demo.model.ChatRequest;
 
 @RestController
 public class AiController {
@@ -17,8 +15,8 @@ public class AiController {
 	}
 
 	@PostMapping("/ai/generate")
-	public String generate(@RequestBody ChatRequest chatRequest) {
-		String userMessage = chatRequest.getParts().stream().map(p -> p.getText()).collect(Collectors.joining("\n"));
-		return backendService.getAiResponse(userMessage, chatRequest.getParts());
+	public String generate(@RequestBody List<String> chatRequest) {
+		String userMessage = String.join("\n",  chatRequest);
+		return backendService.getAiResponse(userMessage);
 	}
 }

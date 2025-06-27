@@ -198,7 +198,7 @@
                 const response = await fetch('/ai/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ parts })
+                    body: JSON.stringify(parts)
                 });
 
                 if (!response.ok) {
@@ -212,11 +212,10 @@
                     suggestionsContent.innerHTML = text;
                     suggestionsDisplay.classList.remove('hidden');
                     chatContainer.classList.remove('hidden');
-                    chatHistory.push({ text });
                 } else {
                     appendMessageToChat('Travel Agent', text, 'text-green-700');
-                    chatHistory.push({ text });
                 }
+				chatHistory.push("You answered:" + text);
             } catch (err) {
                 console.error("Error:", err);
                 displayError(`Failed to get response: ${err.message}. Please try again.`);
@@ -240,7 +239,7 @@
 
                 Please provide a personalized travel plan based on these details.
             `;
-            chatHistory = [{ text: userPrompt }];
+            chatHistory = [userPrompt];
             callApi(chatHistory, generateBtn);
         });
 
@@ -249,7 +248,7 @@
             if (!userMessage) return;
 
             chatInput.value = '';
-            chatHistory.push({ text: userMessage });
+            chatHistory.push(userMessage);
             appendMessageToChat('You', userMessage, 'text-blue-700');
             callApi(chatHistory, sendChatBtn);
         });
