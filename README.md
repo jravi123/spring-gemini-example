@@ -77,5 +77,5 @@ A version of deployed application on App Engine can be accessed [here](https://m
 * Spring AI: https://docs.spring.io/spring-ai/reference/index.html
 
 
-Google Cloud credits are provided for this project #AISprint
+Google Cloud credits are provided for this project #AISprint, #AISpringH2
 
