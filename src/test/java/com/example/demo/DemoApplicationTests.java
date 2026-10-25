@@ -42,13 +42,15 @@ import com.example.demo.exception.GlobalExceptionHandler;
 class DemoApplicationTests {
 
 	private ChatModel chatModel;
+	private UserRepository userRepository;
 	private BackendService backendService;
 	private MockMvc mockMvc;
 
 	@BeforeEach
 	void setUp() {
 		chatModel = Mockito.mock(ChatModel.class);
-		backendService = new BackendService(chatModel);
+		userRepository = Mockito.mock(UserRepository.class);
+		backendService = new BackendService(chatModel, userRepository);
 		AiController controller = new AiController(backendService);
 		mockMvc = MockMvcBuilders.standaloneSetup(controller)
 				.setControllerAdvice(new GlobalExceptionHandler())
@@ -223,6 +225,26 @@ class DemoApplicationTests {
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.title").value("Bad Request"))
 				.andExpect(jsonPath("$.detail").value("Chat request list cannot be empty."));
+	}
+
+	@Test
+	void controllerCreateUserEndpointSavesAndReturnsUser() throws Exception {
+		User savedUser = new User();
+		savedUser.setFirstName("Jane");
+		savedUser.setLastName("Doe");
+		when(userRepository.save(any(User.class))).thenReturn(savedUser);
+
+		mockMvc.perform(post("/ai/user")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+						{
+						  "firstName": "Jane",
+						  "lastName": "Doe"
+						}
+						"""))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.firstName").value("Jane"))
+				.andExpect(jsonPath("$.lastName").value("Doe"));
 	}
 
 	@Test

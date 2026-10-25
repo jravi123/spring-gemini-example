@@ -59,4 +59,9 @@ public class AiController {
 		String userMessage = String.join("\n", chatRequest);
 		return backendService.getAiResponse(userMessage);
 	}
+
+	@PostMapping("/user")
+	public User generate(@RequestBody User user) {
+		return backendService.saveUser(user);
+	}
 }

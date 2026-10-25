@@ -51,13 +51,19 @@ public class BackendService {
 			""";
 
 	private final ChatModel chatModel;
+	private final UserRepository userRepository;
 	private final Parser markdownParser;
 	private final HtmlRenderer htmlRenderer;
 
-	public BackendService(ChatModel chatModel) {
+	public BackendService(ChatModel chatModel, UserRepository userRepository) {
 		this.chatModel = chatModel;
+		this.userRepository = userRepository;
 		this.markdownParser = Parser.builder().build();
 		this.htmlRenderer = HtmlRenderer.builder().escapeHtml(true).build();
+	}
+
+	public User saveUser(User user) {
+		return this.userRepository.save(user);
 	}
 
 	/**
