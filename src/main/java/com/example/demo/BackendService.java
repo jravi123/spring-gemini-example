@@ -21,6 +21,8 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.google.genai.common.GoogleGenAiThinkingLevel;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.resilience.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -52,12 +54,22 @@ public class BackendService {
 
 	private final ChatModel chatModel;
 	private final UserRepository userRepository;
+	private final String modelName;
 	private final Parser markdownParser;
 	private final HtmlRenderer htmlRenderer;
 
 	public BackendService(ChatModel chatModel, UserRepository userRepository) {
+		this(chatModel, userRepository, "gemini-3.8-flash");
+	}
+
+	@Autowired
+	public BackendService(
+			ChatModel chatModel,
+			UserRepository userRepository,
+			@Value("${spring.ai.google.genai.chat.options.model:gemini-3.8-flash}") String modelName) {
 		this.chatModel = chatModel;
 		this.userRepository = userRepository;
+		this.modelName = modelName;
 		this.markdownParser = Parser.builder().build();
 		this.htmlRenderer = HtmlRenderer.builder().escapeHtml(true).build();
 	}
@@ -122,6 +134,7 @@ public class BackendService {
 		}
 
 		GoogleGenAiChatOptions options = GoogleGenAiChatOptions.builder()
+				.model(this.modelName)
 				.thinkingLevel(GoogleGenAiThinkingLevel.LOW)
 				.temperature(0.2)
 				.build();

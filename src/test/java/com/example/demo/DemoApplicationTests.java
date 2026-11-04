@@ -123,6 +123,7 @@ class DemoApplicationTests {
 		assertThat(sentMessages.get(1)).isInstanceOf(UserMessage.class);
 		assertThat(sentMessages.get(2)).isInstanceOf(AssistantMessage.class);
 		assertThat(sentMessages.get(3)).isInstanceOf(UserMessage.class);
+		assertThat(promptCaptor.getValue().getOptions().getModel()).isEqualTo("gemini-3.8-flash");
 	}
 
 	@Test
