@@ -16,7 +16,7 @@
 	<description>Demo project for Spring Boot and Google GenAI</description>
 	<properties>
 		<java.version>21</java.version>
-		<spring-ai.version>2.0.0-M4</spring-ai.version>
+		<spring-ai.version>2.0.2</spring-ai.version>
 		<google-cloud.version>26.84.0</google-cloud.version>
 		<spring-cloud-gcp.version>7.4.1</spring-cloud-gcp.version>
 		<maven.compiler.source>21</maven.compiler.source>
