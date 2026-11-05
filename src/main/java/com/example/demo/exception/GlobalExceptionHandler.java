@@ -9,6 +9,7 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * Centralized exception handling returning RFC 9457 ProblemDetail responses.
@@ -35,6 +36,14 @@ public class GlobalExceptionHandler {
 		logger.warn("Bad request: {}", ex.getMessage());
 		ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
 		problem.setTitle("Bad Request");
+		return problem;
+	}
+
+	@ExceptionHandler(NoResourceFoundException.class)
+	public ProblemDetail handleNoResourceFound(NoResourceFoundException ex) {
+		logger.debug("Static resource not found: {}", ex.getResourcePath());
+		ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+		problem.setTitle("Not Found");
 		return problem;
 	}
 

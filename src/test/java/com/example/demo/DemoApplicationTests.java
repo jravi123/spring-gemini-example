@@ -29,9 +29,15 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
+import org.springframework.ai.google.genai.common.GoogleGenAiThinkingLevel;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import com.example.demo.dto.AiResponse;
 import com.example.demo.dto.ChatMessage;
@@ -151,6 +157,29 @@ class DemoApplicationTests {
 		when(nullOutputGen.getOutput()).thenReturn(null);
 		when(emptyResultResponse.getResult()).thenReturn(nullOutputGen);
 		assertThat(backendService.getAiResponse("Hello")).isEmpty();
+
+		AssistantMessage nullTextMessage = mock(AssistantMessage.class);
+		when(nullTextMessage.getText()).thenReturn(null);
+		when(nullOutputGen.getOutput()).thenReturn(nullTextMessage);
+		assertThat(backendService.getAiResponse("Hello")).isEmpty();
+	}
+
+	@Test
+	void customModelNameAndOptionsAreAppliedToPrompt() {
+		BackendService customService = new BackendService(chatModel, userRepository, "gemini-2.5-pro");
+		ChatResponse mockResponse = new ChatResponse(List.of(new Generation(new AssistantMessage("Custom model reply"))));
+		when(chatModel.call(any(Prompt.class))).thenReturn(mockResponse);
+
+		String html = customService.getAiResponse("Test custom model");
+		assertThat(html).isEqualTo("<p>Custom model reply</p>\n");
+
+		ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+		verify(chatModel).call(promptCaptor.capture());
+
+		GoogleGenAiChatOptions options = (GoogleGenAiChatOptions) promptCaptor.getValue().getOptions();
+		assertThat(options.getModel()).isEqualTo("gemini-2.5-pro");
+		assertThat(options.getThinkingLevel()).isEqualTo(GoogleGenAiThinkingLevel.LOW);
+		assertThat(options.getTemperature()).isEqualTo(0.2);
 	}
 
 	@Test
@@ -246,6 +275,42 @@ class DemoApplicationTests {
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.firstName").value("Jane"))
 				.andExpect(jsonPath("$.lastName").value("Doe"));
+
+		ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
+		verify(userRepository).save(userCaptor.capture());
+		assertThat(userCaptor.getValue().getFirstName()).isEqualTo("Jane");
+		assertThat(userCaptor.getValue().getLastName()).isEqualTo("Doe");
+		assertThat(userCaptor.getValue().getId()).isNull();
+	}
+
+	@Test
+	void controllerPlanValidationRejectsOversizedDestination() throws Exception {
+		String oversizedDestination = "A".repeat(201);
+		mockMvc.perform(post("/ai/plan")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+						{
+						  "destination": "%s"
+						}
+						""".formatted(oversizedDestination)))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.title").value("Invalid Request Parameters"))
+				.andExpect(jsonPath("$.detail").value("destination: Destination must be 200 characters or fewer"));
+	}
+
+	@Test
+	void controllerChatValidationRejectsBlankMessageContent() throws Exception {
+		mockMvc.perform(post("/ai/chat")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+						{
+						  "messages": [
+						    { "role": "USER", "content": "   " }
+						  ]
+						}
+						"""))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.title").value("Invalid Request Parameters"));
 	}
 
 	@Test
@@ -275,6 +340,16 @@ class DemoApplicationTests {
 				.andExpect(status().isInternalServerError())
 				.andExpect(jsonPath("$.title").value("AI Service Error"))
 				.andExpect(jsonPath("$.detail").value("Failed to generate a response from the AI service. Please try again shortly."));
+	}
+
+	@Test
+	void globalExceptionHandlerReturns404ForNoResourceFoundException() {
+		GlobalExceptionHandler handler = new GlobalExceptionHandler();
+		NoResourceFoundException ex = new NoResourceFoundException(HttpMethod.GET, "/nonexistent.ico", "/nonexistent.ico");
+
+		ProblemDetail problem = handler.handleNoResourceFound(ex);
+		assertThat(problem.getStatus()).isEqualTo(HttpStatus.NOT_FOUND.value());
+		assertThat(problem.getTitle()).isEqualTo("Not Found");
 	}
 
 	// =========================================================================

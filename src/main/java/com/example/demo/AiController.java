@@ -61,7 +61,7 @@ public class AiController {
 	}
 
 	@PostMapping("/user")
-	public User generate(@RequestBody User user) {
+	public User createUser(@RequestBody User user) {
 		return backendService.saveUser(user);
 	}
 }

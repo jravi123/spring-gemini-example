@@ -1,22 +1,72 @@
 #!/bin/bash
-# Exit immediately if a command exits with a non-zero status
+# ==============================================================================
+# Personal Travel Agent - Local API Setup & Google Cloud Run Deployment Script
+# ==============================================================================
+# What this script does:
+#   1. Prompts you to pick a Google Cloud Project from a numbered list [1-N].
+#   2. Syncs that Project ID into src/main/resources/application.properties.
+#   3. Enables the required Google Cloud APIs (Vertex AI, Datastore, Cloud Run, etc.).
+#      - If you pass `--apis-only`, the script stops here so you can run locally
+#        with `./mvnw spring-boot:run`.
+#   4. Runs JUnit unit tests, SpotBugs security scans, and packages the Spring Boot JAR.
+#   5. Grants IAM roles (Vertex AI, Cloud Datastore, Cloud Logging) to the Cloud Run
+#      service account.
+#   6. Builds a container image via Google Cloud Build and deploys it to Cloud Run.
+# ==============================================================================
+
+# Exit immediately if any untested command exits with a non-zero status
 set -e
 
-# Force temporary directory to /tmp to avoid permission denied issues in restricted environments
+# Force temporary directory to /tmp to avoid permission issues in restricted shells
 export TMPDIR=/tmp
 
-# Configuration
+# ==============================================================================
+# SECTION 1: Configuration & Default Flags
+# ==============================================================================
 REGION="us-central1"
 REPO_NAME="travel-agent-repo"
 SERVICE_NAME="travel-agent-demo"
 JAR_SOURCE="target/demo-0.0.1-SNAPSHOT.jar"
+CONFIG_FILE="$HOME/.travel_agent_demo_deploy.json"
 
-# Initialize flags
+# Google Cloud APIs required by the application and deployment pipeline
+REQUIRED_APIS=(
+    "run.googleapis.com"               # Google Cloud Run (serverless container hosting)
+    "artifactregistry.googleapis.com"  # Artifact Registry (stores built Docker images)
+    "aiplatform.googleapis.com"        # Vertex AI (Gemini model inference)
+    "datastore.googleapis.com"         # Cloud Datastore (NoSQL database for User entities)
+    "cloudbuild.googleapis.com"        # Cloud Build (builds the Docker container in GCP)
+    "iam.googleapis.com"               # Identity and Access Management (service account roles)
+    "logging.googleapis.com"           # Cloud Logging (application logs)
+)
+
+# IAM roles required by the default Compute Engine / Cloud Run service account at runtime
+REQUIRED_IAM_ROLES=(
+    "roles/aiplatform.user"            # Allows calling Vertex AI Gemini models
+    "roles/datastore.user"             # Allows reading/writing entities in Cloud Datastore
+    "roles/logging.logWriter"          # Allows writing container logs to Cloud Logging
+)
+
+# Default CLI option flags (can be overridden via command-line arguments in Section 3)
 RUN_TESTS=true
 RUN_SCANS=true
 FORCE_REBUILD=false
+ENABLE_APIS_ONLY=false
 PROJECT_ID_OVERRIDE=""
 
+# Temporary paths cleaned up automatically when the script exits
+ENV_YAML_FILE=""
+TEMP_BUILD_DIR=""
+cleanup_temp_files() {
+    rm -rf "$ENV_YAML_FILE" "$TEMP_BUILD_DIR" 2>/dev/null || true
+}
+trap cleanup_temp_files EXIT
+
+# ==============================================================================
+# SECTION 2: CLI Help & Utility Functions
+# ==============================================================================
+
+# Prints usage instructions when `--help` / `-h` is passed
 show_help() {
     echo "================================================================="
     echo "🤖 Personal Travel Agent - Cloud Run Build & Deploy Script"
@@ -24,30 +74,32 @@ show_help() {
     echo "Usage: ./run.sh [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --project <id>     Deploy to a specific GCP Project ID (overrides gcloud config)"
-    echo "  --skip-tests       Skip running JUnit unit tests during build"
+    echo "  --project <id>     Deploy to a specific GCP Project ID (skips interactive menu)"
+    echo "  --apis-only        Only enable required Google Cloud APIs and update application.properties"
+    echo "  --skip-tests       Skip running JUnit unit tests during the Maven build"
     echo "  --skip-scans       Skip running SpotBugs SAST code analysis"
-    echo "  --force, --rebuild Bypass all caches and force a full re-build / re-deploy"
+    echo "  --force, --rebuild Bypass all caches and force a full rebuild and redeploy"
     echo "  -f                 Short alias for --force"
     echo "  --help, -h         Display this reference and exit"
     echo ""
-    echo "⚡ Smart Caching & Optimization Behavior (Subsequent Runs):"
-    echo "  • GCP APIs & IAM: Skipped if already verified on the active project."
-    echo "  • Container Build: Skipped automatically if the compiled JAR has not"
-    echo "    changed and the image already exists in Artifact Registry."
+    echo "⚡ Smart Caching Behavior (stored in ~/.travel_agent_demo_deploy.json):"
+    echo "  • GCP APIs & IAM: Skipped if already enabled for the selected project."
+    echo "  • Container Build: Skipped if the compiled JAR SHA-256 hash has not"
+    echo "    changed and the container image already exists in Artifact Registry."
     echo "  • Cloud Run Deploy: Skipped if neither the image nor env vars changed."
-    echo "  • Project Switching: Setup cache automatically resets if you switch"
-    echo "    to a different GCP project ID."
+    echo "  • Project Switching: Cache automatically resets when switching projects."
     echo ""
     echo "Examples:"
-    echo "  ./run.sh                         # Build, test, scan, and deploy to active project"
-    echo "  ./run.sh --project my-gcp-proj   # Deploy to a specific GCP project"
-    echo "  ./run.sh --skip-tests            # Fast build & deploy without running tests"
-    echo "  ./run.sh --force                 # Force complete re-build and re-deploy from scratch"
+    echo "  ./run.sh                         # Pick project [1-N], build, test, scan, and deploy"
+    echo "  ./run.sh --apis-only             # Pick project [1-N] and enable GCP APIs for local runs"
+    echo "  ./run.sh --project my-gcp-proj   # Deploy directly to 'my-gcp-proj'"
+    echo "  ./run.sh --skip-tests            # Fast build & deploy without running unit tests"
+    echo "  ./run.sh --force                 # Force complete rebuild and redeploy from scratch"
     echo "================================================================="
 }
 
-# --- Helper Functions ---
+# Computes the SHA-256 checksum of a file so we can detect whether the compiled
+# JAR or environment variable configuration changed since the last deployment.
 get_sha256() {
     local target_file="$1"
     if [ ! -f "$target_file" ]; then
@@ -63,7 +115,45 @@ get_sha256() {
     fi
 }
 
-# --- Argument Parsing ---
+# Executes a shell command quietly, shows its log output only if an error occurs,
+# and lets the user interactively Retry (1), Skip (2), or Abort (3) on failure.
+run_step() {
+    local step_name="$1"
+    local command="$2"
+
+    echo "⚙️  Running: $step_name..."
+
+    local log_file
+    log_file=$(mktemp)
+    set +e
+    eval "$command" > "$log_file" 2>&1
+    local exit_status=$?
+    set -e
+
+    if [ $exit_status -ne 0 ]; then
+        echo "❌ Step failed! (Exit code: $exit_status)"
+        echo "----------------------------------------"
+        if [ -s "$log_file" ]; then cat "$log_file"; echo ""; fi
+        echo "----------------------------------------"
+        rm -f "$log_file"
+
+        echo -e "\n1) Retry  2) Skip  3) Abort"
+        read -p "Choice [1-3]: " fail_choice
+        case $fail_choice in
+            1) run_step "$step_name" "$command" ;;
+            2) return 0 ;;
+            *) exit 1 ;;
+        esac
+    else
+        echo "✅ Success!"
+        rm -f "$log_file"
+        echo ""
+    fi
+}
+
+# ==============================================================================
+# SECTION 3: Command-Line Argument Parsing
+# ==============================================================================
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --project|-p)
@@ -84,6 +174,9 @@ while [[ "$#" -gt 0 ]]; do
         --force|--rebuild|-f)
             FORCE_REBUILD=true
             ;;
+        --apis-only)
+            ENABLE_APIS_ONLY=true
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -101,42 +194,118 @@ echo "=================================================="
 echo "🤖 Personal Travel Agent - Cloud Run Deployer"
 echo "=================================================="
 echo "Execution Plan:"
-echo " - Local Build (Tests: $RUN_TESTS, SpotBugs Scan: $RUN_SCANS)"
-echo " - Cloud Run Service: $SERVICE_NAME ($REGION)"
-[ "$FORCE_REBUILD" = true ] && echo " - Mode: Force Rebuild (Bypassing cache)"
+if [ "$ENABLE_APIS_ONLY" = true ]; then
+    echo " - Mode: Enable Required Google Cloud APIs Only (--apis-only)"
+else
+    echo " - Local Build (Tests: $RUN_TESTS, SpotBugs Scan: $RUN_SCANS)"
+    echo " - Cloud Run Service: $SERVICE_NAME ($REGION)"
+    [ "$FORCE_REBUILD" = true ] && echo " - Mode: Force Rebuild (Bypassing cache)"
+fi
 echo "=================================================="
 echo ""
 
-# 1. Verify gcloud credentials and explicitly prompt for target project ID
+# ==============================================================================
+# SECTION 4: Interactive GCP Project Selection & application.properties Sync
+# ==============================================================================
+# Fetches all active GCP projects accessible by your `gcloud` account and displays
+# a numbered menu [1-N] (unless `--project <id>` was passed on the command line).
 CURRENT_GCLOUD_PROJECT=$(gcloud config get-value project 2>/dev/null)
 
 if [ -n "$PROJECT_ID_OVERRIDE" ]; then
     PROJECT_ID="$PROJECT_ID_OVERRIDE"
 else
-    echo "⚠️  Safety Check: Explicit GCP Project ID confirmation is required."
-    if [ -n "$CURRENT_GCLOUD_PROJECT" ]; then
-        echo "   Current gcloud default project is: $CURRENT_GCLOUD_PROJECT"
+    echo "🔍 Fetching available Google Cloud projects..."
+    PROJECT_IDS=()
+    PROJECT_NAMES=()
+    while IFS=$'\t' read -r pid pname; do
+        if [ -n "$pid" ]; then
+            PROJECT_IDS+=("$pid")
+            PROJECT_NAMES+=("$pname")
+        fi
+    done < <(gcloud projects list --filter="lifecycleState:ACTIVE" --format="value(projectId,name)" --sort-by=projectId 2>/dev/null)
+
+    PROJECT_COUNT=${#PROJECT_IDS[@]}
+    if [ "$PROJECT_COUNT" -eq 0 ]; then
+        echo "⚠️  No projects returned by 'gcloud projects list'."
+        read -p "👉 Please enter the target GCP Project ID manually: " PROJECT_ID
+        PROJECT_ID=$(echo "$PROJECT_ID" | xargs)
     else
-        echo "   Current gcloud default project is: (none set)"
+        echo ""
+        echo "Available GCP Projects:"
+        echo "--------------------------------------------------"
+        for (( i=0; i<PROJECT_COUNT; i++ )); do
+            idx=$((i + 1))
+            marker=""
+            if [ "${PROJECT_IDS[$i]}" = "$CURRENT_GCLOUD_PROJECT" ]; then
+                marker=" [current]"
+            fi
+            printf "  %2d) %-32s (%s)%s\n" "$idx" "${PROJECT_IDS[$i]}" "${PROJECT_NAMES[$i]}" "$marker"
+        done
+        echo "--------------------------------------------------"
+        read -p "👉 Select a project by number [1-$PROJECT_COUNT]: " PROJECT_CHOICE
+        PROJECT_CHOICE=$(echo "$PROJECT_CHOICE" | xargs)
+
+        if ! [[ "$PROJECT_CHOICE" =~ ^[0-9]+$ ]] || [ "$PROJECT_CHOICE" -lt 1 ] || [ "$PROJECT_CHOICE" -gt "$PROJECT_COUNT" ]; then
+            echo "❌ Error: Invalid selection '$PROJECT_CHOICE'. Please enter a number between 1 and $PROJECT_COUNT."
+            exit 1
+        fi
+        PROJECT_ID="${PROJECT_IDS[$((PROJECT_CHOICE - 1))]}"
     fi
-    read -p "👉 Please explicitly enter the target GCP Project ID to deploy to: " PROJECT_ID
-    PROJECT_ID=$(echo "$PROJECT_ID" | xargs)
 fi
 
 if [ -z "$PROJECT_ID" ]; then
-    echo "❌ Error: You must explicitly enter a GCP Project ID (blank input is not allowed to prevent accidental deployment to the default project)."
+    echo "❌ Error: No GCP Project ID selected."
     exit 1
 fi
 
+# Export the selected project ID across standard Google Cloud and Spring Boot
+# environment variables so all child commands use the chosen project.
+export PROJECT_ID
+export CLOUDSDK_CORE_PROJECT="$PROJECT_ID"
+export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
+export GCP_PROJECT="$PROJECT_ID"
+export GCLOUD_PROJECT="$PROJECT_ID"
+export DEVSHELL_PROJECT_ID="$PROJECT_ID"
+export SPRING_CLOUD_GCP_PROJECT_ID="$PROJECT_ID"
+export SPRING_CLOUD_GCP_DATASTORE_PROJECT_ID="$PROJECT_ID"
+export SPRING_AI_GOOGLE_GENAI_PROJECT_ID="$PROJECT_ID"
+
 gcloud config set project "$PROJECT_ID" >/dev/null 2>&1
 
+# Update the fallback project ID inside src/main/resources/application.properties
+# so running `./mvnw spring-boot:run` locally or packaging the JAR uses $PROJECT_ID.
+APP_PROPS="src/main/resources/application.properties"
+if [ -f "$APP_PROPS" ]; then
+    python3 - "$APP_PROPS" "$PROJECT_ID" <<'PYEOF'
+import re, sys
+
+path, proj = sys.argv[1], sys.argv[2]
+with open(path, 'r') as f:
+    content = f.read()
+
+genai_line = f"spring.ai.google.genai.project-id=${{SPRING_AI_GOOGLE_GENAI_PROJECT_ID:${{GOOGLE_CLOUD_PROJECT:${{GCP_PROJECT:${{DEVSHELL_PROJECT_ID:{proj}}}}}}}}}"
+gcp_line = f"spring.cloud.gcp.project-id=${{GOOGLE_CLOUD_PROJECT:${{GCP_PROJECT:${{DEVSHELL_PROJECT_ID:${{SPRING_AI_GOOGLE_GENAI_PROJECT_ID:{proj}}}}}}}}}"
+ds_line = f"spring.cloud.gcp.datastore.project-id=${{GOOGLE_CLOUD_PROJECT:${{GCP_PROJECT:${{DEVSHELL_PROJECT_ID:${{SPRING_AI_GOOGLE_GENAI_PROJECT_ID:{proj}}}}}}}}}"
+
+content = re.sub(r'^spring\.ai\.google\.genai\.project-id=.*$', lambda _: genai_line, content, flags=re.MULTILINE)
+content = re.sub(r'^spring\.cloud\.gcp\.project-id=.*$', lambda _: gcp_line, content, flags=re.MULTILINE)
+content = re.sub(r'^spring\.cloud\.gcp\.datastore\.project-id=.*$', lambda _: ds_line, content, flags=re.MULTILINE)
+
+with open(path, 'w') as f:
+    f.write(content)
+PYEOF
+fi
+
 ACTIVE_ACCOUNT=$(gcloud config get-value account 2>/dev/null)
-echo "Deploying to GCP Project: $PROJECT_ID"
-echo "Deployer Account:         $ACTIVE_ACCOUNT"
+echo "Target GCP Project: $PROJECT_ID"
+echo "Active Account:     $ACTIVE_ACCOUNT"
 echo ""
 
-# Configuration file path for caching project initialization and build states
-CONFIG_FILE="$HOME/.travel_agent_demo_deploy.json"
+# ==============================================================================
+# SECTION 5: Smart Deployment Cache (~/.travel_agent_demo_deploy.json)
+# ==============================================================================
+# Remembers whether APIs, IAM roles, and Artifact Registry have already been
+# initialized for $PROJECT_ID, as well as the last deployed JAR & env hashes.
 APIS_INITIALIZED="false"
 IAM_INITIALIZED="false"
 INFRA_INITIALIZED="false"
@@ -172,8 +341,9 @@ with open(config_path, 'w') as f:
 " 2>/dev/null || true
 }
 
+# Load cached state from disk if it exists
 if [ -f "$CONFIG_FILE" ]; then
-    eval $(python3 -c "
+    eval "$(python3 -c "
 import json, os
 try:
     with open(os.path.expanduser('$CONFIG_FILE'), 'r') as f:
@@ -183,12 +353,12 @@ try:
             print(f'export {k}=\"{val}\"')
 except Exception:
     pass
-")
+")"
 fi
 
-# Invalidate cache if targeting a different project
+# Reset cached flags if the user selected a different GCP project than last time
 if [ -n "$LAST_DEPLOYED_PROJECT_ID" ] && [ "$PROJECT_ID" != "$LAST_DEPLOYED_PROJECT_ID" ]; then
-    echo "ℹ️  Different GCP Project detected ($PROJECT_ID vs previous $LAST_DEPLOYED_PROJECT_ID). Resetting project setup cache."
+    echo "ℹ️  Switched GCP Project ($PROJECT_ID vs previous $LAST_DEPLOYED_PROJECT_ID). Resetting setup cache."
     APIS_INITIALIZED="false"
     IAM_INITIALIZED="false"
     INFRA_INITIALIZED="false"
@@ -196,41 +366,34 @@ if [ -n "$LAST_DEPLOYED_PROJECT_ID" ] && [ "$PROJECT_ID" != "$LAST_DEPLOYED_PROJ
     LAST_ENV_HASH=""
 fi
 
-# Helper function to run a command with interactive retry/skip/abort on failure
-run_step() {
-    local step_name="$1"
-    local command="$2"
-
-    echo "⚙️  Running: $step_name..."
-
-    local log_file=$(mktemp)
-    set +e
-    eval "$command" > "$log_file" 2>&1
-    local exit_status=$?
-    set -e
-
-    if [ $exit_status -ne 0 ]; then
-        echo "❌ Step failed! (Exit code: $exit_status)"
-        echo "----------------------------------------"
-        if [ -s "$log_file" ]; then cat "$log_file"; echo ""; fi
-        echo "----------------------------------------"
-        rm -f "$log_file"
-
-        echo -e "\n1) Retry  2) Skip  3) Abort"
-        read -p "Choice [1-3]: " fail_choice
-        case $fail_choice in
-            1) run_step "$step_name" "$command" ;;
-            2) return 0 ;;
-            *) exit 1 ;;
-        esac
+# ==============================================================================
+# SECTION 6: Google Cloud API Enablement (--apis-only or Full Deploy)
+# ==============================================================================
+# Enables all APIs listed in REQUIRED_APIS (or skips if already enabled for
+# this project and `--force` was not passed).
+enable_required_apis() {
+    if [ "$FORCE_REBUILD" = false ] && [ "$APIS_INITIALIZED" = "true" ] && [ "$PROJECT_ID" = "$LAST_DEPLOYED_PROJECT_ID" ]; then
+        echo "⚡ Google Cloud APIs already enabled for $PROJECT_ID (skipping; use --force to re-verify)."
     else
-        echo "✅ Success!"
-        rm -f "$log_file"
-        echo ""
+        run_step "Enable Google Cloud APIs" "gcloud services enable ${REQUIRED_APIS[*]} --project $PROJECT_ID"
+        APIS_INITIALIZED="true"
+        save_config_state
     fi
 }
 
-# --- Step 1: Build, Test, and Scan Locally ---
+# If the user ran `./run.sh --apis-only` (for local development), enable APIs and exit now
+if [ "$ENABLE_APIS_ONLY" = true ]; then
+    echo "=== Enabling Required Google Cloud APIs for $PROJECT_ID ==="
+    enable_required_apis
+    echo "=========================================="
+    echo "🎉 Google Cloud APIs Ready for $PROJECT_ID! 🎉"
+    echo "=========================================="
+    exit 0
+fi
+
+# ==============================================================================
+# SECTION 7: Step 1 — Local Java Build, JUnit Tests & SpotBugs Security Scan
+# ==============================================================================
 echo "=== Step 1: Building Java Application ==="
 MVN_CMD="./mvnw"
 if [ ! -x "$MVN_CMD" ]; then
@@ -254,33 +417,42 @@ fi
 run_step "Package Application JAR" "$MVN_CMD package -DskipTests"
 
 if [ ! -f "$JAR_SOURCE" ]; then
-    echo "Error: Compiled JAR not found at $JAR_SOURCE"
+    echo "❌ Error: Compiled JAR not found at $JAR_SOURCE"
     exit 1
 fi
 
-# --- Step 2: Enable Required Google Cloud APIs & Configure IAM ---
+# ==============================================================================
+# SECTION 8: Step 2 — Google Cloud APIs & Service Account IAM Permissions
+# ==============================================================================
 echo "=== Step 2: Google Cloud APIs & IAM Permissions ==="
-if [ "$FORCE_REBUILD" = false ] && [ "$APIS_INITIALIZED" = "true" ] && [ "$PROJECT_ID" = "$LAST_DEPLOYED_PROJECT_ID" ]; then
-    echo "⚡ Google Cloud APIs already enabled for $PROJECT_ID (use --force to re-verify)."
-else
-    run_step "Enable Google Cloud APIs" "gcloud services enable run.googleapis.com artifactregistry.googleapis.com aiplatform.googleapis.com cloudbuild.googleapis.com iam.googleapis.com logging.googleapis.com --project $PROJECT_ID"
-    APIS_INITIALIZED="true"
-    save_config_state
-fi
+enable_required_apis
 
+# Look up the default Compute Engine service account used by Cloud Run
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
 DEFAULT_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
 if [ "$FORCE_REBUILD" = false ] && [ "$IAM_INITIALIZED" = "true" ] && [ "$PROJECT_ID" = "$LAST_DEPLOYED_PROJECT_ID" ]; then
     echo "⚡ IAM permissions already configured for $DEFAULT_SA (use --force to re-verify)."
 else
-    run_step "Verify Vertex AI / GenAI IAM Permissions" "gcloud projects add-iam-policy-binding $PROJECT_ID --member='serviceAccount:$DEFAULT_SA' --role='roles/aiplatform.user' --quiet && gcloud projects add-iam-policy-binding $PROJECT_ID --member='serviceAccount:$DEFAULT_SA' --role='roles/logging.logWriter' --quiet"
+    # Build the IAM binding command for all roles in REQUIRED_IAM_ROLES
+    IAM_CMD=""
+    for role in "${REQUIRED_IAM_ROLES[@]}"; do
+        if [ -n "$IAM_CMD" ]; then
+            IAM_CMD="$IAM_CMD && "
+        fi
+        IAM_CMD="${IAM_CMD}gcloud projects add-iam-policy-binding $PROJECT_ID --member='serviceAccount:$DEFAULT_SA' --role='$role' --quiet"
+    done
+    run_step "Grant Vertex AI, Datastore & Logging IAM Roles" "$IAM_CMD"
     IAM_INITIALIZED="true"
     save_config_state
 fi
 
-# --- Step 3: Build Container & Deploy to Cloud Run ---
+# ==============================================================================
+# SECTION 9: Step 3A — Container Image Build (Artifact Registry & Cloud Build)
+# ==============================================================================
 echo "=== Step 3: Cloud Run Deployment ==="
+
+# 1. Ensure the Docker repository exists in Artifact Registry
 if [ "$FORCE_REBUILD" = false ] && [ "$INFRA_INITIALIZED" = "true" ] && [ "$PROJECT_ID" = "$LAST_DEPLOYED_PROJECT_ID" ]; then
     echo "⚡ Artifact Registry repository ($REPO_NAME) already initialized."
 else
@@ -289,12 +461,13 @@ else
     save_config_state
 fi
 
-# Generate runtime environment configuration
+# 2. Generate runtime environment variables file for the Cloud Run service
 ENV_YAML_FILE="/tmp/travel_agent_env.yaml"
-rm -f "$ENV_YAML_FILE"
 cat <<EOF > "$ENV_YAML_FILE"
 GCP_PROJECT: "$PROJECT_ID"
 GOOGLE_CLOUD_PROJECT: "$PROJECT_ID"
+SPRING_CLOUD_GCP_PROJECT_ID: "$PROJECT_ID"
+SPRING_CLOUD_GCP_DATASTORE_PROJECT_ID: "$PROJECT_ID"
 SPRING_AI_GOOGLE_GENAI_PROJECT_ID: "$PROJECT_ID"
 SPRING_AI_GOOGLE_GENAI_LOCATION: "global"
 SPRING_AI_GOOGLE_GENAI_MODEL: "gemini-3.8-flash"
@@ -309,28 +482,25 @@ CURRENT_JAR_HASH=$(get_sha256 "$JAR_SOURCE")
 CURRENT_ENV_HASH=$(get_sha256 "$ENV_YAML_FILE")
 IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/${SERVICE_NAME}:latest"
 
-# Check if container image already exists in Artifact Registry
+# 3. Check if the container image already exists in Artifact Registry and whether
+#    the local JAR changed since the last build.
 IMAGE_EXISTS=false
-set +e
 if gcloud artifacts docker images describe "$IMAGE_TAG" --project "$PROJECT_ID" --format='value(image_summary.digest)' >/dev/null 2>&1; then
     IMAGE_EXISTS=true
 fi
-set -e
 
 NEED_CONTAINER_BUILD=true
 if [ "$FORCE_REBUILD" = false ] && [ "$IMAGE_EXISTS" = true ] && [ -n "$CURRENT_JAR_HASH" ] && [ "$CURRENT_JAR_HASH" = "$LAST_JAR_HASH" ]; then
     NEED_CONTAINER_BUILD=false
 fi
 
-TEMP_BUILD_DIR=$(mktemp -d /tmp/.travel-build-XXXXXX)
 if [ "$NEED_CONTAINER_BUILD" = true ]; then
+    TEMP_BUILD_DIR=$(mktemp -d /tmp/.travel-build-XXXXXX)
     cp "$JAR_SOURCE" "$TEMP_BUILD_DIR/app.jar"
-    cp "$ENV_YAML_FILE" "$TEMP_BUILD_DIR/env.yaml"
     cat <<EOF > "$TEMP_BUILD_DIR/Dockerfile"
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 COPY app.jar app.jar
-COPY env.yaml env.yaml
 EXPOSE 8080
 ENTRYPOINT ["java", "--enable-native-access=ALL-UNNAMED", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]
 EOF
@@ -343,13 +513,15 @@ else
     echo "   ⏩ Skipping Cloud Build container build (use --force to rebuild)."
 fi
 
-# Check if Cloud Run service is already active
+# ==============================================================================
+# SECTION 10: Step 3B — Cloud Run Service Deployment & URL Output
+# ==============================================================================
+# Check if the Cloud Run service is already active and whether the image or
+# environment variables changed since the last deployment.
 SERVICE_ACTIVE=false
-set +e
 if gcloud run services describe "$SERVICE_NAME" --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)' >/dev/null 2>&1; then
     SERVICE_ACTIVE=true
 fi
-set -e
 
 NEED_RUN_DEPLOY=true
 if [ "$FORCE_REBUILD" = false ] && [ "$NEED_CONTAINER_BUILD" = false ] && [ "$SERVICE_ACTIVE" = true ] && [ -n "$CURRENT_ENV_HASH" ] && [ "$CURRENT_ENV_HASH" = "$LAST_ENV_HASH" ]; then
@@ -357,14 +529,24 @@ if [ "$FORCE_REBUILD" = false ] && [ "$NEED_CONTAINER_BUILD" = false ] && [ "$SE
 fi
 
 if [ "$NEED_RUN_DEPLOY" = true ]; then
-    run_step "Deploy Service to Cloud Run" "gcloud run deploy $SERVICE_NAME --image $IMAGE_TAG --region $REGION --project $PROJECT_ID --allow-unauthenticated --env-vars-file $ENV_YAML_FILE --concurrency=60 --memory=1Gi --cpu=1 --min-instances=0 --max-instances=5 --timeout=300"
+    DEPLOY_CMD="gcloud run deploy $SERVICE_NAME \
+        --image $IMAGE_TAG \
+        --region $REGION \
+        --project $PROJECT_ID \
+        --allow-unauthenticated \
+        --env-vars-file $ENV_YAML_FILE \
+        --concurrency=60 \
+        --memory=1Gi \
+        --cpu=1 \
+        --min-instances=0 \
+        --max-instances=5 \
+        --timeout=300"
+    run_step "Deploy Service to Cloud Run" "$DEPLOY_CMD"
     LAST_ENV_HASH="$CURRENT_ENV_HASH"
     save_config_state
 else
     echo "⚡ Cloud Run service ($SERVICE_NAME) is already active with up-to-date configuration. Skipping deployment."
 fi
-
-rm -rf "$TEMP_BUILD_DIR" "$ENV_YAML_FILE"
 
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)' 2>/dev/null)
 
