@@ -66,7 +66,7 @@ public class BackendService {
 	public BackendService(
 			ChatModel chatModel,
 			UserRepository userRepository,
-			@Value("${spring.ai.google.genai.chat.options.model:gemini-3.8-flash}") String modelName) {
+			@Value("${spring.ai.google.genai.chat.model:gemini-3.8-flash}") String modelName) {
 		this.chatModel = chatModel;
 		this.userRepository = userRepository;
 		this.modelName = modelName;
@@ -81,7 +81,7 @@ public class BackendService {
 	/**
 	 * Builds a structured initial travel prompt from the user's preferences and calls the AI model.
 	 */
-	@Retryable(includes = { RuntimeException.class }, maxRetries = 3, delay = 2000, multiplier = 2)
+	@Retryable(includes = { RuntimeException.class }, excludes = { IllegalArgumentException.class }, maxRetries = 3, delay = 2000, multiplier = 2)
 	public AiResponse generateTravelPlan(TravelPlanRequest request) {
 		PromptTemplate template = new PromptTemplate(TRAVEL_PLAN_TEMPLATE);
 		String userPrompt = template.render(Map.of(
@@ -99,7 +99,7 @@ public class BackendService {
 	/**
 	 * Conducts a multi-turn conversation using native UserMessage and AssistantMessage role boundaries.
 	 */
-	@Retryable(includes = { RuntimeException.class }, maxRetries = 3, delay = 2000, multiplier = 2)
+	@Retryable(includes = { RuntimeException.class }, excludes = { IllegalArgumentException.class }, maxRetries = 3, delay = 2000, multiplier = 2)
 	public AiResponse chat(List<ChatMessage> conversationHistory) {
 		if (conversationHistory == null || conversationHistory.isEmpty()) {
 			throw new IllegalArgumentException("Conversation history cannot be empty.");
@@ -112,7 +112,7 @@ public class BackendService {
 	/**
 	 * Legacy convenience method for single-string prompt execution.
 	 */
-	@Retryable(includes = { RuntimeException.class }, maxRetries = 3, delay = 2000, multiplier = 2)
+	@Retryable(includes = { RuntimeException.class }, excludes = { IllegalArgumentException.class }, maxRetries = 3, delay = 2000, multiplier = 2)
 	public String getAiResponse(String userMessage) {
 		List<ChatMessage> messages = List.of(new ChatMessage(ChatMessage.Role.USER, userMessage));
 		return renderMarkdownToHtml(callChatWithHistory(messages));

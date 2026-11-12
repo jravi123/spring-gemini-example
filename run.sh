@@ -117,9 +117,11 @@ get_sha256() {
 
 # Executes a shell command quietly, shows its log output only if an error occurs,
 # and lets the user interactively Retry (1), Skip (2), or Abort (3) on failure.
+LAST_STEP_SKIPPED=false
 run_step() {
     local step_name="$1"
     local command="$2"
+    LAST_STEP_SKIPPED=false
 
     echo "⚙️  Running: $step_name..."
 
@@ -141,7 +143,7 @@ run_step() {
         read -p "Choice [1-3]: " fail_choice
         case $fail_choice in
             1) run_step "$step_name" "$command" ;;
-            2) return 0 ;;
+            2) LAST_STEP_SKIPPED=true; return 0 ;;
             *) exit 1 ;;
         esac
     else
@@ -310,6 +312,8 @@ APIS_INITIALIZED="false"
 IAM_INITIALIZED="false"
 INFRA_INITIALIZED="false"
 LAST_DEPLOYED_PROJECT_ID=""
+LAST_ENABLED_APIS=""
+LAST_IAM_ROLES=""
 LAST_JAR_HASH=""
 LAST_ENV_HASH=""
 
@@ -331,6 +335,8 @@ updates = {
     'APIS_INITIALIZED': '$APIS_INITIALIZED',
     'IAM_INITIALIZED': '$IAM_INITIALIZED',
     'INFRA_INITIALIZED': '$INFRA_INITIALIZED',
+    'LAST_ENABLED_APIS': '$LAST_ENABLED_APIS',
+    'LAST_IAM_ROLES': '$LAST_IAM_ROLES',
     'LAST_JAR_HASH': '$LAST_JAR_HASH',
     'LAST_ENV_HASH': '$LAST_ENV_HASH'
 }
@@ -362,6 +368,8 @@ if [ -n "$LAST_DEPLOYED_PROJECT_ID" ] && [ "$PROJECT_ID" != "$LAST_DEPLOYED_PROJ
     APIS_INITIALIZED="false"
     IAM_INITIALIZED="false"
     INFRA_INITIALIZED="false"
+    LAST_ENABLED_APIS=""
+    LAST_IAM_ROLES=""
     LAST_JAR_HASH=""
     LAST_ENV_HASH=""
 fi
@@ -369,15 +377,56 @@ fi
 # ==============================================================================
 # SECTION 6: Google Cloud API Enablement (--apis-only or Full Deploy)
 # ==============================================================================
-# Enables all APIs listed in REQUIRED_APIS (or skips if already enabled for
-# this project and `--force` was not passed).
+# Verifies every service in REQUIRED_APIS (including datastore.googleapis.com)
+# against the live project and enables any missing APIs automatically, even if
+# an older cache entry exists in ~/.travel_agent_demo_deploy.json.
 enable_required_apis() {
-    if [ "$FORCE_REBUILD" = false ] && [ "$APIS_INITIALIZED" = "true" ] && [ "$PROJECT_ID" = "$LAST_DEPLOYED_PROJECT_ID" ]; then
-        echo "⚡ Google Cloud APIs already enabled for $PROJECT_ID (skipping; use --force to re-verify)."
+    local required_apis_str="${REQUIRED_APIS[*]}"
+
+    if [ "$FORCE_REBUILD" = true ]; then
+        run_step "Enable Google Cloud APIs" "gcloud services enable ${REQUIRED_APIS[*]} --project=$PROJECT_ID --quiet"
+        if [ "$LAST_STEP_SKIPPED" = false ]; then
+            APIS_INITIALIZED="true"
+            LAST_ENABLED_APIS="$required_apis_str"
+            save_config_state
+        fi
+        return
+    fi
+
+    local enabled_apis
+    if ! enabled_apis=$(gcloud services list --enabled --project="$PROJECT_ID" --format="value(config.name)" --quiet 2>/dev/null); then
+        # Fallback if listing enabled services fails: attempt to enable all required APIs directly
+        run_step "Enable Google Cloud APIs" "gcloud services enable ${REQUIRED_APIS[*]} --project=$PROJECT_ID --quiet"
+        if [ "$LAST_STEP_SKIPPED" = false ]; then
+            APIS_INITIALIZED="true"
+            LAST_ENABLED_APIS="$required_apis_str"
+            save_config_state
+        fi
+        return
+    fi
+
+    local missing_apis=()
+    for api in "${REQUIRED_APIS[@]}"; do
+        if ! printf '%s\n' "$enabled_apis" | grep -Fxq "$api"; then
+            missing_apis+=("$api")
+        fi
+    done
+
+    if [ "${#missing_apis[@]}" -eq 0 ]; then
+        echo "⚡ All required Google Cloud APIs (including datastore.googleapis.com) are enabled for $PROJECT_ID."
+        if [ "$APIS_INITIALIZED" != "true" ] || [ "$LAST_ENABLED_APIS" != "$required_apis_str" ]; then
+            APIS_INITIALIZED="true"
+            LAST_ENABLED_APIS="$required_apis_str"
+            save_config_state
+        fi
     else
-        run_step "Enable Google Cloud APIs" "gcloud services enable ${REQUIRED_APIS[*]} --project $PROJECT_ID"
-        APIS_INITIALIZED="true"
-        save_config_state
+        echo "ℹ️  Missing required API(s) on $PROJECT_ID: ${missing_apis[*]}"
+        run_step "Enable Missing Google Cloud APIs (${missing_apis[*]})" "gcloud services enable ${missing_apis[*]} --project=$PROJECT_ID --quiet"
+        if [ "$LAST_STEP_SKIPPED" = false ]; then
+            APIS_INITIALIZED="true"
+            LAST_ENABLED_APIS="$required_apis_str"
+            save_config_state
+        fi
     fi
 }
 
@@ -431,7 +480,8 @@ enable_required_apis
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
 DEFAULT_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-if [ "$FORCE_REBUILD" = false ] && [ "$IAM_INITIALIZED" = "true" ] && [ "$PROJECT_ID" = "$LAST_DEPLOYED_PROJECT_ID" ]; then
+CURRENT_IAM_ROLES="${REQUIRED_IAM_ROLES[*]}"
+if [ "$FORCE_REBUILD" = false ] && [ "$IAM_INITIALIZED" = "true" ] && [ "$PROJECT_ID" = "$LAST_DEPLOYED_PROJECT_ID" ] && [ "$LAST_IAM_ROLES" = "$CURRENT_IAM_ROLES" ]; then
     echo "⚡ IAM permissions already configured for $DEFAULT_SA (use --force to re-verify)."
 else
     # Build the IAM binding command for all roles in REQUIRED_IAM_ROLES
@@ -443,8 +493,11 @@ else
         IAM_CMD="${IAM_CMD}gcloud projects add-iam-policy-binding $PROJECT_ID --member='serviceAccount:$DEFAULT_SA' --role='$role' --quiet"
     done
     run_step "Grant Vertex AI, Datastore & Logging IAM Roles" "$IAM_CMD"
-    IAM_INITIALIZED="true"
-    save_config_state
+    if [ "$LAST_STEP_SKIPPED" = false ]; then
+        IAM_INITIALIZED="true"
+        LAST_IAM_ROLES="$CURRENT_IAM_ROLES"
+        save_config_state
+    fi
 fi
 
 # ==============================================================================

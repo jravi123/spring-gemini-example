@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -31,10 +32,14 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.google.genai.common.GoogleGenAiThinkingLevel;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
+import org.springframework.resilience.annotation.EnableResilientMethods;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
@@ -376,5 +381,46 @@ class DemoApplicationTests {
 		assertThat(System.getProperty("otel.metrics.exporter")).isEqualTo("none");
 		assertThat(System.getProperty("otel.traces.exporter")).isEqualTo("none");
 		assertThat(System.getProperty("otel.logs.exporter")).isEqualTo("none");
+	}
+
+	@Test
+	void proxiedBackendServiceDoesNotRetryIllegalArgumentException() {
+		try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext(ResilienceTestConfig.class)) {
+			BackendService proxiedService = ctx.getBean(BackendService.class);
+			ChatModel mockChatModel = ctx.getBean(ChatModel.class);
+
+			assertThatThrownBy(() -> proxiedService.chat(List.of()))
+					.isInstanceOf(IllegalArgumentException.class)
+					.hasMessageContaining("Conversation history cannot be empty");
+
+			when(mockChatModel.call(any(Prompt.class)))
+					.thenThrow(new IllegalArgumentException("Invalid model parameter"));
+
+			assertThatThrownBy(() -> proxiedService.getAiResponse("Hello"))
+					.isInstanceOf(IllegalArgumentException.class)
+					.hasMessageContaining("Invalid model parameter");
+
+			verify(mockChatModel, times(1)).call(any(Prompt.class));
+		}
+	}
+
+	@Configuration(proxyBeanMethods = false)
+	@EnableResilientMethods
+	static class ResilienceTestConfig {
+
+		@Bean
+		ChatModel chatModel() {
+			return Mockito.mock(ChatModel.class);
+		}
+
+		@Bean
+		UserRepository userRepository() {
+			return Mockito.mock(UserRepository.class);
+		}
+
+		@Bean
+		BackendService backendService(ChatModel chatModel, UserRepository userRepository) {
+			return new BackendService(chatModel, userRepository);
+		}
 	}
 }
