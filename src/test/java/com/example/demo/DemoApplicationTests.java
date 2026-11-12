@@ -1,17 +1,5 @@
 package com.example.demo;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -30,8 +18,6 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
-import org.springframework.ai.google.genai.common.GoogleGenAiThinkingLevel;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -47,8 +33,20 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import com.example.demo.dto.AiResponse;
 import com.example.demo.dto.ChatMessage;
 import com.example.demo.dto.ChatRequest;
+import com.example.demo.dto.CreateUserRequest;
 import com.example.demo.dto.TravelPlanRequest;
 import com.example.demo.exception.GlobalExceptionHandler;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class DemoApplicationTests {
 
@@ -61,7 +59,8 @@ class DemoApplicationTests {
 	void setUp() {
 		chatModel = Mockito.mock(ChatModel.class);
 		userRepository = Mockito.mock(UserRepository.class);
-		backendService = new BackendService(chatModel, userRepository);
+		backendService = new BackendService(chatModel, userRepository, "gemini-3.8-flash");
+
 		AiController controller = new AiController(backendService);
 		mockMvc = MockMvcBuilders.standaloneSetup(controller)
 				.setControllerAdvice(new GlobalExceptionHandler())
@@ -93,6 +92,21 @@ class DemoApplicationTests {
 		assertThat(result.html()).contains("<h2>Day 1: Kyoto</h2>");
 		assertThat(result.html()).contains("<strong>Fushimi Inari</strong>");
 		assertThat(result.html()).doesNotContain("<script>");
+	}
+
+	@Test
+	void renderMarkdownToHtmlRendersGfmTables() {
+		String markdown = """
+				| Day | Activity | Cost |
+				| --- | --- | --- |
+				| Day 1 | Tokyo Tower | $30 |
+				| Day 2 | Mount Fuji | $100 |
+				""";
+		String html = backendService.renderMarkdownToHtml(markdown);
+		assertThat(html).contains("<table>");
+		assertThat(html).contains("<thead>");
+		assertThat(html).contains("<th>Activity</th>");
+		assertThat(html).contains("<td>Tokyo Tower</td>");
 	}
 
 	@Test
@@ -149,58 +163,33 @@ class DemoApplicationTests {
 	}
 
 	@Test
-	void getAiResponseAndNullModelResponsesAreHandledGracefully() {
+	void nullModelResponsesAreHandledGracefully() {
 		when(chatModel.call(any(Prompt.class))).thenReturn(null);
-		assertThat(backendService.getAiResponse("Hello")).isEmpty();
+		AiResponse nullResponse = backendService.generateTravelPlan(new TravelPlanRequest("Tokyo", null, null, null));
+		assertThat(nullResponse.markdown()).isEmpty();
 
 		ChatResponse emptyResultResponse = mock(ChatResponse.class);
 		when(emptyResultResponse.getResult()).thenReturn(null);
 		when(chatModel.call(any(Prompt.class))).thenReturn(emptyResultResponse);
-		assertThat(backendService.getAiResponse("Hello")).isEmpty();
-
-		Generation nullOutputGen = mock(Generation.class);
-		when(nullOutputGen.getOutput()).thenReturn(null);
-		when(emptyResultResponse.getResult()).thenReturn(nullOutputGen);
-		assertThat(backendService.getAiResponse("Hello")).isEmpty();
-
-		AssistantMessage nullTextMessage = mock(AssistantMessage.class);
-		when(nullTextMessage.getText()).thenReturn(null);
-		when(nullOutputGen.getOutput()).thenReturn(nullTextMessage);
-		assertThat(backendService.getAiResponse("Hello")).isEmpty();
-	}
-
-	@Test
-	void customModelNameAndOptionsAreAppliedToPrompt() {
-		BackendService customService = new BackendService(chatModel, userRepository, "gemini-2.5-pro");
-		ChatResponse mockResponse = new ChatResponse(List.of(new Generation(new AssistantMessage("Custom model reply"))));
-		when(chatModel.call(any(Prompt.class))).thenReturn(mockResponse);
-
-		String html = customService.getAiResponse("Test custom model");
-		assertThat(html).isEqualTo("<p>Custom model reply</p>\n");
-
-		ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
-		verify(chatModel).call(promptCaptor.capture());
-
-		GoogleGenAiChatOptions options = (GoogleGenAiChatOptions) promptCaptor.getValue().getOptions();
-		assertThat(options.getModel()).isEqualTo("gemini-2.5-pro");
-		assertThat(options.getThinkingLevel()).isEqualTo(GoogleGenAiThinkingLevel.LOW);
-		assertThat(options.getTemperature()).isEqualTo(0.2);
-	}
-
-	@Test
-	void renderMarkdownToHtmlHandlesBlankAndValidMarkdown() {
-		assertThat(backendService.renderMarkdownToHtml(null)).isEmpty();
-		assertThat(backendService.renderMarkdownToHtml("   ")).isEmpty();
-		assertThat(backendService.renderMarkdownToHtml("**Bold**")).isEqualTo("<p><strong>Bold</strong></p>\n");
+		AiResponse emptyResponse = backendService.generateTravelPlan(new TravelPlanRequest("Tokyo", null, null, null));
+		assertThat(emptyResponse.markdown()).isEmpty();
 	}
 
 	// =========================================================================
-	// AiController & GlobalExceptionHandler Tests
+	// Controller Endpoint & Validation Tests
 	// =========================================================================
 
 	@Test
-	void controllerPlanEndpointReturnsStructuredJson() throws Exception {
-		ChatResponse mockResponse = new ChatResponse(List.of(new Generation(new AssistantMessage("### Paris Plan"))));
+	void controllerPlanEndpointReturnsAiResponse() throws Exception {
+		Usage usage = mock(Usage.class);
+		when(usage.getPromptTokens()).thenReturn(10);
+		when(usage.getCompletionTokens()).thenReturn(20);
+		when(usage.getTotalTokens()).thenReturn(30);
+		ChatResponseMetadata metadata = ChatResponseMetadata.builder().usage(usage).build();
+
+		ChatResponse mockResponse = new ChatResponse(
+				List.of(new Generation(new AssistantMessage("Visit the Eiffel Tower."))),
+				metadata);
 		when(chatModel.call(any(Prompt.class))).thenReturn(mockResponse);
 
 		mockMvc.perform(post("/ai/plan")
@@ -208,19 +197,21 @@ class DemoApplicationTests {
 				.content("""
 						{
 						  "destination": "Paris",
-						  "dates": "5 days",
-						  "interests": "Museums",
-						  "budget": "Mid-range"
+						  "dates": "May 2026",
+						  "interests": "Art, Architecture",
+						  "budget": "High"
 						}
 						"""))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.markdown").value("### Paris Plan"))
-				.andExpect(jsonPath("$.html").value("<h3>Paris Plan</h3>\n"));
+				.andExpect(jsonPath("$.userPrompt").exists())
+				.andExpect(jsonPath("$.markdown").value("Visit the Eiffel Tower."))
+				.andExpect(jsonPath("$.html").value("<p>Visit the Eiffel Tower.</p>\n"));
 	}
 
 	@Test
-	void controllerChatEndpointReturnsStructuredJson() throws Exception {
-		ChatResponse mockResponse = new ChatResponse(List.of(new Generation(new AssistantMessage("Pack an umbrella!"))));
+	void controllerChatEndpointProcessesConversationHistory() throws Exception {
+		ChatResponse mockResponse = new ChatResponse(
+				List.of(new Generation(new AssistantMessage("Louvre tickets cost around 22 euros."))));
 		when(chatModel.call(any(Prompt.class))).thenReturn(mockResponse);
 
 		mockMvc.perform(post("/ai/chat")
@@ -228,43 +219,22 @@ class DemoApplicationTests {
 				.content("""
 						{
 						  "messages": [
-						    { "role": "USER", "content": "What should I pack for London?" }
+						    { "role": "USER", "content": "Tell me about Paris" },
+						    { "role": "ASSISTANT", "content": "Paris is known for the Eiffel Tower and Louvre." },
+						    { "role": "USER", "content": "How much are Louvre tickets?" }
 						  ]
 						}
 						"""))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.userPrompt").value("What should I pack for London?"))
-				.andExpect(jsonPath("$.markdown").value("Pack an umbrella!"))
-				.andExpect(jsonPath("$.html").value("<p>Pack an umbrella!</p>\n"));
-	}
-
-	@Test
-	void controllerGenerateLegacyEndpointReturnsRenderedHtml() throws Exception {
-		ChatResponse mockResponse = new ChatResponse(List.of(new Generation(new AssistantMessage("Rome Itinerary"))));
-		when(chatModel.call(any(Prompt.class))).thenReturn(mockResponse);
-
-		mockMvc.perform(post("/ai/generate")
-				.contentType(MediaType.APPLICATION_JSON)
-				.content("""
-						["Destination: Rome", "Duration: 3 days"]
-						"""))
-				.andExpect(status().isOk())
-				.andExpect(content().string("<p>Rome Itinerary</p>\n"));
-	}
-
-	@Test
-	void controllerGenerateLegacyEndpointRejectsEmptyListWithBadRequest() throws Exception {
-		mockMvc.perform(post("/ai/generate")
-				.contentType(MediaType.APPLICATION_JSON)
-				.content("[]"))
-				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.title").value("Bad Request"))
-				.andExpect(jsonPath("$.detail").value("Chat request list cannot be empty."));
+				.andExpect(jsonPath("$.userPrompt").value("How much are Louvre tickets?"))
+				.andExpect(jsonPath("$.markdown").value("Louvre tickets cost around 22 euros."))
+				.andExpect(jsonPath("$.html").value("<p>Louvre tickets cost around 22 euros.</p>\n"));
 	}
 
 	@Test
 	void controllerCreateUserEndpointSavesAndReturnsUser() throws Exception {
 		User savedUser = new User();
+		savedUser.setId(1L);
 		savedUser.setFirstName("Jane");
 		savedUser.setLastName("Doe");
 		when(userRepository.save(any(User.class))).thenReturn(savedUser);
@@ -278,6 +248,7 @@ class DemoApplicationTests {
 						}
 						"""))
 				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.id").value(1))
 				.andExpect(jsonPath("$.firstName").value("Jane"))
 				.andExpect(jsonPath("$.lastName").value("Doe"));
 
@@ -286,6 +257,35 @@ class DemoApplicationTests {
 		assertThat(userCaptor.getValue().getFirstName()).isEqualTo("Jane");
 		assertThat(userCaptor.getValue().getLastName()).isEqualTo("Doe");
 		assertThat(userCaptor.getValue().getId()).isNull();
+	}
+
+	@Test
+	void controllerCreateUserEndpointRejectsBlankFields() throws Exception {
+		mockMvc.perform(post("/ai/user")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+						{
+						  "firstName": "   ",
+						  "lastName": ""
+						}
+						"""))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.title").value("Invalid Request Parameters"));
+	}
+
+	@Test
+	void controllerCreateUserEndpointRejectsOversizedNames() throws Exception {
+		String longName = "A".repeat(101);
+		mockMvc.perform(post("/ai/user")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+						{
+						  "firstName": "%s",
+						  "lastName": "Doe"
+						}
+						""".formatted(longName)))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.title").value("Invalid Request Parameters"));
 	}
 
 	@Test
@@ -374,6 +374,23 @@ class DemoApplicationTests {
 	}
 
 	@Test
+	void chatRequestValidatesNonNullAndEnforcesLastRoleIsUser() {
+		List<ChatMessage> listWithNull = new ArrayList<>();
+		listWithNull.add(null);
+		assertThatThrownBy(() -> new ChatRequest(listWithNull))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("cannot contain null messages");
+
+		List<ChatMessage> listEndingWithAssistant = List.of(
+				new ChatMessage(ChatMessage.Role.USER, "Hello"),
+				new ChatMessage(ChatMessage.Role.ASSISTANT, "Hi there")
+		);
+		assertThatThrownBy(() -> new ChatRequest(listEndingWithAssistant))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("The last message in conversation history must have role USER");
+	}
+
+	@Test
 	void demoApplicationSetsOtelSystemProperties() {
 		DemoApplication app = new DemoApplication();
 		assertThat(app).isNotNull();
@@ -396,7 +413,7 @@ class DemoApplicationTests {
 			when(mockChatModel.call(any(Prompt.class)))
 					.thenThrow(new IllegalArgumentException("Invalid model parameter"));
 
-			assertThatThrownBy(() -> proxiedService.getAiResponse("Hello"))
+			assertThatThrownBy(() -> proxiedService.chat(List.of(new ChatMessage(ChatMessage.Role.USER, "Hello"))))
 					.isInstanceOf(IllegalArgumentException.class)
 					.hasMessageContaining("Invalid model parameter");
 

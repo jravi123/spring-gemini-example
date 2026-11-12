@@ -210,15 +210,3 @@ chatForm.addEventListener('submit', async (event) => {
     }
 });
 
-/**
- * IME-safe Enter-to-submit handler for the chat input.
- */
-chatInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-        event.preventDefault();
-        if (event.isComposing || event.keyCode === 229) {
-            return;
-        }
-        chatForm.requestSubmit();
-    }
-});

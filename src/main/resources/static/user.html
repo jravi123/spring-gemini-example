@@ -49,11 +49,25 @@
         }
         #response {
             margin-top: 20px;
-            padding: 10px;
+            padding: 12px;
             border-radius: 4px;
             background-color: #e9ecef;
             border: 1px solid #ced4da;
             white-space: pre-wrap;
+            display: none;
+            word-break: break-word;
+        }
+        #response.success {
+            display: block;
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
+        }
+        #response.error {
+            display: block;
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
         }
     </style>
 </head>
@@ -76,33 +90,69 @@
     </div>
 
     <script>
-        document.getElementById('userForm').addEventListener('submit', function(event) {
+        const userForm = document.getElementById('userForm');
+        const responseDiv = document.getElementById('response');
+        const submitBtn = userForm.querySelector('button[type="submit"]');
+
+        userForm.addEventListener('submit', async function(event) {
             event.preventDefault(); // Prevent default form submission
 
-            const firstName = document.getElementById('firstName').value;
-            const lastName = document.getElementById('lastName').value;
+            const firstName = document.getElementById('firstName').value.trim();
+            const lastName = document.getElementById('lastName').value.trim();
 
             const userData = {
                 firstName: firstName,
                 lastName: lastName
             };
 
-            fetch('/ai/user', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(userData),
-            })
-            .then(response => response.json())
-            .then(data => {
-                document.getElementById('response').innerText = 'User created successfully:\n' + JSON.stringify(data, null, 2);
-                document.getElementById('userForm').reset(); // Clear the form
-            })
-            .catch((error) => {
-                document.getElementById('response').innerText = 'Error creating user:\n' + error;
+            submitBtn.disabled = true;
+            submitBtn.innerText = 'Creating...';
+            responseDiv.className = '';
+            responseDiv.style.display = 'none';
+            responseDiv.innerText = '';
+
+            try {
+                const response = await fetch('/ai/user', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(userData),
+                });
+
+                let data;
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('application/json')) {
+                    data = await response.json();
+                } else {
+                    data = await response.text();
+                }
+
+                if (!response.ok) {
+                    let errorMessage = 'Failed to create user.';
+                    if (data && typeof data === 'object') {
+                        errorMessage = data.detail || data.title || JSON.stringify(data, null, 2);
+                    } else if (typeof data === 'string' && data.trim()) {
+                        errorMessage = data;
+                    } else if (response.statusText) {
+                        errorMessage = response.statusText;
+                    }
+                    responseDiv.className = 'error';
+                    responseDiv.innerText = `Error (${response.status}): ${errorMessage}`;
+                    return;
+                }
+
+                responseDiv.className = 'success';
+                responseDiv.innerText = 'User created successfully:\n' + JSON.stringify(data, null, 2);
+                userForm.reset(); // Clear the form only on success
+            } catch (error) {
+                responseDiv.className = 'error';
+                responseDiv.innerText = 'Network/Client error creating user:\n' + (error.message || error);
                 console.error('Error:', error);
-            });
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerText = 'Submit';
+            }
         });
     </script>
 </body>

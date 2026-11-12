@@ -123,7 +123,8 @@ Open your browser to:
 | Option | Description |
 |---|---|
 | `--project <id>`, `-p <id>` | Target a specific GCP Project ID directly (skips the interactive numbered prompt and updates `application.properties`). |
-| `--apis-only` | Only enable required Google Cloud APIs for the selected project and exit. |
+| `--billing-account <id>`, `-b <id>` | Link a specific Cloud Billing Account ID if billing is disabled on the target project (otherwise auto-detected/prompted). |
+| `--apis-only` | Only verify billing and enable required Google Cloud APIs for the selected project, then exit. |
 | `--skip-tests` | Skip running JUnit unit tests during the Maven build. |
 | `--skip-scans` | Skip running SpotBugs SAST code analysis. |
 | `--force`, `--rebuild`, `-f` | Bypass smart caching and force a complete rebuild and redeployment. |

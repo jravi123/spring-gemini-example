@@ -5,13 +5,15 @@
 # What this script does:
 #   1. Prompts you to pick a Google Cloud Project from a numbered list [1-N].
 #   2. Syncs that Project ID into src/main/resources/application.properties.
-#   3. Enables the required Google Cloud APIs (Vertex AI, Datastore, Cloud Run, etc.).
+#   3. Verifies Cloud Billing is enabled on the project (and links an active
+#      billing account automatically if needed).
+#   4. Enables the required Google Cloud APIs (Vertex AI, Datastore, Cloud Run, etc.).
 #      - If you pass `--apis-only`, the script stops here so you can run locally
 #        with `./mvnw spring-boot:run`.
-#   4. Runs JUnit unit tests, SpotBugs security scans, and packages the Spring Boot JAR.
-#   5. Grants IAM roles (Vertex AI, Cloud Datastore, Cloud Logging) to the Cloud Run
+#   5. Runs JUnit unit tests, SpotBugs security scans, and packages the Spring Boot JAR.
+#   6. Grants IAM roles (Vertex AI, Cloud Datastore, Cloud Logging) to the Cloud Run
 #      service account.
-#   6. Builds a container image via Google Cloud Build and deploys it to Cloud Run.
+#   7. Builds a container image via Google Cloud Build and deploys it to Cloud Run.
 # ==============================================================================
 
 # Exit immediately if any untested command exits with a non-zero status
@@ -53,6 +55,7 @@ RUN_SCANS=true
 FORCE_REBUILD=false
 ENABLE_APIS_ONLY=false
 PROJECT_ID_OVERRIDE=""
+BILLING_ACCOUNT_OVERRIDE=""
 
 # Temporary paths cleaned up automatically when the script exits
 ENV_YAML_FILE=""
@@ -74,13 +77,14 @@ show_help() {
     echo "Usage: ./run.sh [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --project <id>     Deploy to a specific GCP Project ID (skips interactive menu)"
-    echo "  --apis-only        Only enable required Google Cloud APIs and update application.properties"
-    echo "  --skip-tests       Skip running JUnit unit tests during the Maven build"
-    echo "  --skip-scans       Skip running SpotBugs SAST code analysis"
-    echo "  --force, --rebuild Bypass all caches and force a full rebuild and redeploy"
-    echo "  -f                 Short alias for --force"
-    echo "  --help, -h         Display this reference and exit"
+    echo "  --project <id>          Deploy to a specific GCP Project ID (skips interactive menu)"
+    echo "  --billing-account <id>  Link a specific Cloud Billing Account ID if billing is disabled"
+    echo "  --apis-only             Only enable required Google Cloud APIs and update application.properties"
+    echo "  --skip-tests            Skip running JUnit unit tests during the Maven build"
+    echo "  --skip-scans            Skip running SpotBugs SAST code analysis"
+    echo "  --force, --rebuild      Bypass all caches and force a full rebuild and redeploy"
+    echo "  -f                      Short alias for --force"
+    echo "  --help, -h              Display this reference and exit"
     echo ""
     echo "⚡ Smart Caching Behavior (stored in ~/.travel_agent_demo_deploy.json):"
     echo "  • GCP APIs & IAM: Skipped if already enabled for the selected project."
@@ -164,6 +168,15 @@ while [[ "$#" -gt 0 ]]; do
                 shift
             else
                 echo "Error: --project requires a non-empty project ID argument."
+                exit 1
+            fi
+            ;;
+        --billing-account|-b)
+            if [ -n "$2" ] && [[ "$2" != --* ]]; then
+                BILLING_ACCOUNT_OVERRIDE="${2#billingAccounts/}"
+                shift
+            else
+                echo "Error: --billing-account requires a non-empty Billing Account ID."
                 exit 1
             fi
             ;;
@@ -375,8 +388,153 @@ if [ -n "$LAST_DEPLOYED_PROJECT_ID" ] && [ "$PROJECT_ID" != "$LAST_DEPLOYED_PROJ
 fi
 
 # ==============================================================================
-# SECTION 6: Google Cloud API Enablement (--apis-only or Full Deploy)
+# SECTION 6: Cloud Billing Verification & Google Cloud API Enablement
 # ==============================================================================
+# Ensures an active Cloud Billing account is linked to $PROJECT_ID before
+# enabling billing-gated services (Cloud Run, Artifact Registry, Cloud Build).
+BILLING_CHECKED=false
+ensure_billing_enabled() {
+    if [ "$BILLING_CHECKED" = true ]; then
+        return 0
+    fi
+    BILLING_CHECKED=true
+
+    local billing_cmd="gcloud billing"
+    if ! gcloud billing --help >/dev/null 2>&1; then
+        billing_cmd="gcloud beta billing"
+    fi
+
+    local billing_json=""
+    local describe_ok=false
+    if billing_json=$($billing_cmd projects describe "$PROJECT_ID" --format="json" 2>/dev/null); then
+        describe_ok=true
+    fi
+
+    if [ "$describe_ok" = true ]; then
+        local is_enabled
+        is_enabled=$(BILLING_JSON="$billing_json" python3 -c '
+import json, os
+try:
+    data = json.loads(os.environ.get("BILLING_JSON", "{}") or "{}")
+    print("true" if data.get("billingEnabled") is True else "false")
+except Exception:
+    print("unknown")
+')
+        if [ "$is_enabled" = "true" ]; then
+            echo "⚡ Cloud Billing is active for $PROJECT_ID."
+            return 0
+        fi
+    else
+        # If billing info cannot be read (e.g., restricted role on an already-billed shared project),
+        # proceed unless an explicit --billing-account override was passed.
+        if [ -z "$BILLING_ACCOUNT_OVERRIDE" ]; then
+            return 0
+        fi
+    fi
+
+    echo "⚠️  Cloud Billing is not enabled for project '$PROJECT_ID'."
+    local selected_account="$BILLING_ACCOUNT_OVERRIDE"
+    local selected_name=""
+
+    if [ -z "$selected_account" ]; then
+        echo "🔍 Checking available active Cloud Billing accounts..."
+        local accounts_json="[]"
+        accounts_json=$($billing_cmd accounts list --filter="open=true" --format="json" 2>/dev/null || echo "[]")
+
+        local account_ids=()
+        local account_names=()
+        while IFS=$'\t' read -r aid aname; do
+            if [ -n "$aid" ]; then
+                account_ids+=("$aid")
+                account_names+=("$aname")
+            fi
+        done < <(ACCOUNTS_JSON="$accounts_json" python3 -c '
+import json, os
+try:
+    items = json.loads(os.environ.get("ACCOUNTS_JSON", "[]") or "[]")
+    for item in items:
+        if item.get("open") is False:
+            continue
+        raw_name = str(item.get("name", "")).strip()
+        aid = raw_name.split("/")[-1] if raw_name else ""
+        dname = str(item.get("displayName", "Billing Account")).replace("\t", " ").strip()
+        if aid:
+            print(f"{aid}\t{dname}")
+except Exception:
+    pass
+')
+
+        local account_count=${#account_ids[@]}
+        if [ "$account_count" -eq 1 ]; then
+            selected_account="${account_ids[0]}"
+            selected_name="${account_names[0]}"
+            echo "💳 Found active billing account: $selected_name ($selected_account)"
+        elif [ "$account_count" -gt 1 ]; then
+            echo ""
+            echo "Available Active Cloud Billing Accounts:"
+            echo "--------------------------------------------------"
+            for (( i=0; i<account_count; i++ )); do
+                idx=$((i + 1))
+                printf "  %2d) %-24s (%s)\n" "$idx" "${account_ids[$i]}" "${account_names[$i]}"
+            done
+            echo "--------------------------------------------------"
+            read -p "👉 Select a billing account to link to '$PROJECT_ID' [1-$account_count]: " billing_choice
+            billing_choice=$(echo "$billing_choice" | xargs)
+            if ! [[ "$billing_choice" =~ ^[0-9]+$ ]] || [ "$billing_choice" -lt 1 ] || [ "$billing_choice" -gt "$account_count" ]; then
+                echo "❌ Error: Invalid selection '$billing_choice'. Please enter a number between 1 and $account_count."
+                exit 1
+            fi
+            selected_account="${account_ids[$((billing_choice - 1))]}"
+            selected_name="${account_names[$((billing_choice - 1))]}"
+        else
+            echo "⚠️  No active Cloud Billing accounts were found automatically."
+            echo "   You can create or view your billing account at:"
+            echo "     https://console.cloud.google.com/billing"
+            echo "   Or link one directly in the Console for '$PROJECT_ID' at:"
+            echo "     https://console.cloud.google.com/billing/linkedaccount?project=$PROJECT_ID"
+            echo ""
+            read -p "👉 Enter a Billing Account ID (e.g. 012345-6789AB-CDEF01), or press Enter if you just linked it in the browser: " manual_account
+            selected_account=$(echo "$manual_account" | xargs)
+            selected_account="${selected_account#billingAccounts/}"
+        fi
+    fi
+
+    if [ -n "$selected_account" ]; then
+        local label="$selected_account"
+        if [ -n "$selected_name" ]; then
+            label="$selected_name ($selected_account)"
+        fi
+        run_step "Link Cloud Billing Account ($label) to $PROJECT_ID" "$billing_cmd projects link '$PROJECT_ID' --billing-account='$selected_account' --quiet"
+        if [ "$LAST_STEP_SKIPPED" = false ]; then
+            # Brief pause so Service Usage recognizes the newly linked billing account
+            sleep 2
+        fi
+    else
+        local recheck_json=""
+        recheck_json=$($billing_cmd projects describe "$PROJECT_ID" --format="json" 2>/dev/null || echo "{}")
+        local now_enabled
+        now_enabled=$(BILLING_JSON="$recheck_json" python3 -c '
+import json, os
+try:
+    data = json.loads(os.environ.get("BILLING_JSON", "{}") or "{}")
+    print("true" if data.get("billingEnabled") is True else "false")
+except Exception:
+    print("false")
+')
+        if [ "$now_enabled" != "true" ]; then
+            echo "❌ Error: Cloud Billing is still not enabled for '$PROJECT_ID'. Billing is required to activate Cloud Run, Artifact Registry, and Cloud Build APIs."
+            exit 1
+        fi
+        echo "✅ Confirmed Cloud Billing is now active for $PROJECT_ID!"
+        echo ""
+    fi
+}
+
+# Verify billing upfront when setting up a new/switched project so any prompt happens immediately
+if [ "$APIS_INITIALIZED" != "true" ] || [ "$FORCE_REBUILD" = true ] || [ -n "$BILLING_ACCOUNT_OVERRIDE" ]; then
+    ensure_billing_enabled
+fi
+
 # Verifies every service in REQUIRED_APIS (including datastore.googleapis.com)
 # against the live project and enables any missing APIs automatically, even if
 # an older cache entry exists in ~/.travel_agent_demo_deploy.json.
@@ -384,6 +542,7 @@ enable_required_apis() {
     local required_apis_str="${REQUIRED_APIS[*]}"
 
     if [ "$FORCE_REBUILD" = true ]; then
+        ensure_billing_enabled
         run_step "Enable Google Cloud APIs" "gcloud services enable ${REQUIRED_APIS[*]} --project=$PROJECT_ID --quiet"
         if [ "$LAST_STEP_SKIPPED" = false ]; then
             APIS_INITIALIZED="true"
@@ -396,6 +555,7 @@ enable_required_apis() {
     local enabled_apis
     if ! enabled_apis=$(gcloud services list --enabled --project="$PROJECT_ID" --format="value(config.name)" --quiet 2>/dev/null); then
         # Fallback if listing enabled services fails: attempt to enable all required APIs directly
+        ensure_billing_enabled
         run_step "Enable Google Cloud APIs" "gcloud services enable ${REQUIRED_APIS[*]} --project=$PROJECT_ID --quiet"
         if [ "$LAST_STEP_SKIPPED" = false ]; then
             APIS_INITIALIZED="true"
@@ -421,6 +581,7 @@ enable_required_apis() {
         fi
     else
         echo "ℹ️  Missing required API(s) on $PROJECT_ID: ${missing_apis[*]}"
+        ensure_billing_enabled
         run_step "Enable Missing Google Cloud APIs (${missing_apis[*]})" "gcloud services enable ${missing_apis[*]} --project=$PROJECT_ID --quiet"
         if [ "$LAST_STEP_SKIPPED" = false ]; then
             APIS_INITIALIZED="true"

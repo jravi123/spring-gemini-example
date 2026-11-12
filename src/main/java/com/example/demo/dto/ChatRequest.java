@@ -15,7 +15,19 @@ public record ChatRequest(
 		List<@Valid ChatMessage> messages) {
 
 	public ChatRequest {
-		messages = messages != null ? List.copyOf(messages) : List.of();
+		if (messages != null) {
+			for (ChatMessage msg : messages) {
+				if (msg == null) {
+					throw new IllegalArgumentException("Conversation history cannot contain null messages.");
+				}
+			}
+			if (!messages.isEmpty() && messages.get(messages.size() - 1).role() != ChatMessage.Role.USER) {
+				throw new IllegalArgumentException("The last message in conversation history must have role USER.");
+			}
+			messages = List.copyOf(messages);
+		} else {
+			messages = List.of();
+		}
 	}
 
 	@Override

@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.commonmark.Extension;
+import org.commonmark.ext.gfm.tables.TablesExtension;
 import org.commonmark.node.Node;
 import org.commonmark.parser.Parser;
 import org.commonmark.renderer.html.HtmlRenderer;
@@ -29,6 +31,7 @@ import org.springframework.util.StringUtils;
 
 import com.example.demo.dto.AiResponse;
 import com.example.demo.dto.ChatMessage;
+import com.example.demo.dto.CreateUserRequest;
 import com.example.demo.dto.TravelPlanRequest;
 
 @Service
@@ -70,8 +73,16 @@ public class BackendService {
 		this.chatModel = chatModel;
 		this.userRepository = userRepository;
 		this.modelName = modelName;
-		this.markdownParser = Parser.builder().build();
-		this.htmlRenderer = HtmlRenderer.builder().escapeHtml(true).build();
+		List<Extension> extensions = List.of(TablesExtension.create());
+		this.markdownParser = Parser.builder().extensions(extensions).build();
+		this.htmlRenderer = HtmlRenderer.builder().extensions(extensions).escapeHtml(true).build();
+	}
+
+	public User saveUser(CreateUserRequest request) {
+		User user = new User();
+		user.setFirstName(request.firstName().trim());
+		user.setLastName(request.lastName().trim());
+		return this.userRepository.save(user);
 	}
 
 	public User saveUser(User user) {
@@ -109,15 +120,6 @@ public class BackendService {
 		return new AiResponse(latestUserMessage, markdown, renderMarkdownToHtml(markdown));
 	}
 
-	/**
-	 * Legacy convenience method for single-string prompt execution.
-	 */
-	@Retryable(includes = { RuntimeException.class }, excludes = { IllegalArgumentException.class }, maxRetries = 3, delay = 2000, multiplier = 2)
-	public String getAiResponse(String userMessage) {
-		List<ChatMessage> messages = List.of(new ChatMessage(ChatMessage.Role.USER, userMessage));
-		return renderMarkdownToHtml(callChatWithHistory(messages));
-	}
-
 	private String callChatWithHistory(List<ChatMessage> conversationHistory) {
 		List<Message> messages = new ArrayList<>(conversationHistory.size() + 1);
 		messages.add(new SystemMessage(SYSTEM_PROMPT));
@@ -136,7 +138,6 @@ public class BackendService {
 		GoogleGenAiChatOptions options = GoogleGenAiChatOptions.builder()
 				.model(this.modelName)
 				.thinkingLevel(GoogleGenAiThinkingLevel.LOW)
-				.temperature(0.2)
 				.build();
 
 		ChatResponse response = this.chatModel.call(new Prompt(messages, options));

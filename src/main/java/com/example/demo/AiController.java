@@ -1,6 +1,5 @@
 package com.example.demo;
 
-import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.example.demo.dto.AiResponse;
 import com.example.demo.dto.ChatRequest;
+import com.example.demo.dto.CreateUserRequest;
 import com.example.demo.dto.TravelPlanRequest;
 
 import jakarta.validation.Valid;
@@ -48,20 +48,9 @@ public class AiController {
 		return ResponseEntity.ok(response);
 	}
 
-	/**
-	 * Legacy endpoint retained for backward compatibility.
-	 */
-	@PostMapping("/generate")
-	public String generate(@RequestBody List<String> chatRequest) {
-		if (chatRequest == null || chatRequest.isEmpty()) {
-			throw new IllegalArgumentException("Chat request list cannot be empty.");
-		}
-		String userMessage = String.join("\n", chatRequest);
-		return backendService.getAiResponse(userMessage);
-	}
 
 	@PostMapping("/user")
-	public User createUser(@RequestBody User user) {
-		return backendService.saveUser(user);
+	public User createUser(@Valid @RequestBody CreateUserRequest request) {
+		return backendService.saveUser(request);
 	}
 }
