@@ -1,9 +1,11 @@
 package com.example.demo;
 
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -48,9 +50,13 @@ public class AiController {
 		return ResponseEntity.ok(response);
 	}
 
-
 	@PostMapping("/user")
 	public User createUser(@Valid @RequestBody CreateUserRequest request) {
 		return backendService.saveUser(request);
+	}
+
+	@GetMapping({ "/user", "/users" })
+	public List<User> getAllUsers() {
+		return backendService.getAllUsers();
 	}
 }

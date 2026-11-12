@@ -3,23 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Create User</title>
+    <title>Manage Users</title>
     <style>
         body {
             font-family: Arial, sans-serif;
             margin: 20px;
             background-color: #f4f4f4;
+            color: #333;
         }
         .container {
             background-color: #fff;
-            padding: 20px;
+            padding: 24px;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-            max-width: 400px;
-            margin: 0 auto;
+            max-width: 600px;
+            margin: 0 auto 24px auto;
+        }
+        h1, h2 {
+            color: #333;
+            margin-top: 0;
         }
         h1 {
-            color: #333;
             text-align: center;
         }
         label {
@@ -28,7 +32,8 @@
             font-weight: bold;
         }
         input[type="text"] {
-            width: calc(100% - 20px);
+            width: 100%;
+            box-sizing: border-box;
             padding: 10px;
             margin-bottom: 15px;
             border: 1px solid #ddd;
@@ -44,8 +49,12 @@
             width: 100%;
             font-size: 16px;
         }
-        button:hover {
+        button:hover:not(:disabled) {
             background-color: #0056b3;
+        }
+        button:disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
         }
         #response {
             margin-top: 20px;
@@ -69,6 +78,57 @@
             border-color: #f5c6cb;
             color: #721c24;
         }
+        .users-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .users-header h2 {
+            margin-bottom: 0;
+            font-size: 20px;
+        }
+        .btn-secondary {
+            width: auto;
+            padding: 6px 12px;
+            font-size: 14px;
+            background-color: #6c757d;
+        }
+        .btn-secondary:hover:not(:disabled) {
+            background-color: #5a6268;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 8px;
+        }
+        th, td {
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+            color: #495057;
+            border-bottom: 2px solid #dee2e6;
+        }
+        tr:hover td {
+            background-color: #f8f9fa;
+        }
+        .status-msg {
+            padding: 12px;
+            text-align: center;
+            color: #666;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+        }
+        .status-msg.error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
     </style>
 </head>
 <body>
@@ -79,23 +139,125 @@
         <h1>Create New User</h1>
         <form id="userForm">
             <label for="firstName">First Name:</label>
-            <input type="text" id="firstName" name="firstName" required>
+            <input type="text" id="firstName" name="firstName" maxlength="100" required>
 
             <label for="lastName">Last Name:</label>
-            <input type="text" id="lastName" name="lastName" required>
+            <input type="text" id="lastName" name="lastName" maxlength="100" required>
 
             <button type="submit">Submit</button>
         </form>
         <div id="response"></div>
     </div>
 
+    <div class="container">
+        <div class="users-header">
+            <h2>Saved Users <span id="userCount" style="font-size: 14px; color: #666; font-weight: normal;"></span></h2>
+            <button type="button" id="refreshUsersBtn" class="btn-secondary">Refresh</button>
+        </div>
+        <div id="usersStatus" class="status-msg">Loading users...</div>
+        <table id="usersTable" style="display: none;">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>First Name</th>
+                    <th>Last Name</th>
+                </tr>
+            </thead>
+            <tbody id="usersTableBody"></tbody>
+        </table>
+    </div>
+
     <script>
         const userForm = document.getElementById('userForm');
         const responseDiv = document.getElementById('response');
         const submitBtn = userForm.querySelector('button[type="submit"]');
+        const refreshUsersBtn = document.getElementById('refreshUsersBtn');
+        const usersStatus = document.getElementById('usersStatus');
+        const usersTable = document.getElementById('usersTable');
+        const usersTableBody = document.getElementById('usersTableBody');
+        const userCount = document.getElementById('userCount');
+
+        async function parseResponsePayload(response) {
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+                return await response.json();
+            }
+            return await response.text();
+        }
+
+        function formatErrorMessage(response, data, fallback) {
+            if (data && typeof data === 'object') {
+                return data.detail || data.title || JSON.stringify(data, null, 2);
+            }
+            if (typeof data === 'string' && data.trim()) {
+                return data;
+            }
+            return response.statusText || fallback;
+        }
+
+        async function loadUsers() {
+            refreshUsersBtn.disabled = true;
+            usersStatus.className = 'status-msg';
+            usersStatus.style.display = 'block';
+            usersStatus.textContent = 'Loading users...';
+
+            try {
+                const response = await fetch('/ai/users');
+                const data = await parseResponsePayload(response);
+
+                if (!response.ok) {
+                    const errMsg = formatErrorMessage(response, data, 'Failed to load users.');
+                    usersTable.style.display = 'none';
+                    userCount.textContent = '';
+                    usersStatus.className = 'status-msg error';
+                    usersStatus.textContent = `Error (${response.status}): ${errMsg}`;
+                    return;
+                }
+
+                const users = Array.isArray(data) ? data : [];
+                userCount.textContent = `(${users.length})`;
+                usersTableBody.replaceChildren();
+
+                if (users.length === 0) {
+                    usersTable.style.display = 'none';
+                    usersStatus.className = 'status-msg';
+                    usersStatus.textContent = 'No users found in Datastore.';
+                    return;
+                }
+
+                for (const user of users) {
+                    const tr = document.createElement('tr');
+
+                    const idTd = document.createElement('td');
+                    idTd.textContent = user.id != null ? String(user.id) : '—';
+
+                    const firstTd = document.createElement('td');
+                    firstTd.textContent = user.firstName || '';
+
+                    const lastTd = document.createElement('td');
+                    lastTd.textContent = user.lastName || '';
+
+                    tr.append(idTd, firstTd, lastTd);
+                    usersTableBody.appendChild(tr);
+                }
+
+                usersStatus.style.display = 'none';
+                usersTable.style.display = 'table';
+            } catch (error) {
+                usersTable.style.display = 'none';
+                userCount.textContent = '';
+                usersStatus.className = 'status-msg error';
+                usersStatus.textContent = 'Network/Client error loading users: ' + (error.message || error);
+                console.error('Error loading users:', error);
+            } finally {
+                refreshUsersBtn.disabled = false;
+            }
+        }
+
+        refreshUsersBtn.addEventListener('click', loadUsers);
 
         userForm.addEventListener('submit', async function(event) {
-            event.preventDefault(); // Prevent default form submission
+            event.preventDefault();
 
             const firstName = document.getElementById('firstName').value.trim();
             const lastName = document.getElementById('lastName').value.trim();
@@ -120,23 +282,10 @@
                     body: JSON.stringify(userData),
                 });
 
-                let data;
-                const contentType = response.headers.get('content-type');
-                if (contentType && contentType.includes('application/json')) {
-                    data = await response.json();
-                } else {
-                    data = await response.text();
-                }
+                const data = await parseResponsePayload(response);
 
                 if (!response.ok) {
-                    let errorMessage = 'Failed to create user.';
-                    if (data && typeof data === 'object') {
-                        errorMessage = data.detail || data.title || JSON.stringify(data, null, 2);
-                    } else if (typeof data === 'string' && data.trim()) {
-                        errorMessage = data;
-                    } else if (response.statusText) {
-                        errorMessage = response.statusText;
-                    }
+                    const errorMessage = formatErrorMessage(response, data, 'Failed to create user.');
                     responseDiv.className = 'error';
                     responseDiv.innerText = `Error (${response.status}): ${errorMessage}`;
                     return;
@@ -144,7 +293,8 @@
 
                 responseDiv.className = 'success';
                 responseDiv.innerText = 'User created successfully:\n' + JSON.stringify(data, null, 2);
-                userForm.reset(); // Clear the form only on success
+                userForm.reset();
+                await loadUsers();
             } catch (error) {
                 responseDiv.className = 'error';
                 responseDiv.innerText = 'Network/Client error creating user:\n' + (error.message || error);
@@ -154,6 +304,9 @@
                 submitBtn.innerText = 'Submit';
             }
         });
+
+        // Fetch existing users on initial load
+        loadUsers();
     </script>
 </body>
 </html>

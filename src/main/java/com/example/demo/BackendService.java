@@ -89,6 +89,12 @@ public class BackendService {
 		return this.userRepository.save(user);
 	}
 
+	public List<User> getAllUsers() {
+		List<User> users = new ArrayList<>();
+		this.userRepository.findAll().forEach(users::add);
+		return users;
+	}
+
 	/**
 	 * Builds a structured initial travel prompt from the user's preferences and calls the AI model.
 	 */

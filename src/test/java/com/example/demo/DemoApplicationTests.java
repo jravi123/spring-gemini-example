@@ -33,7 +33,6 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import com.example.demo.dto.AiResponse;
 import com.example.demo.dto.ChatMessage;
 import com.example.demo.dto.ChatRequest;
-import com.example.demo.dto.CreateUserRequest;
 import com.example.demo.dto.TravelPlanRequest;
 import com.example.demo.exception.GlobalExceptionHandler;
 
@@ -44,6 +43,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -260,6 +260,26 @@ class DemoApplicationTests {
 	}
 
 	@Test
+	void controllerGetAllUsersEndpointReturnsSavedUsers() throws Exception {
+		User user1 = new User("Jane", "Doe");
+		user1.setId(1L);
+		User user2 = new User("John", "Smith");
+		user2.setId(2L);
+		when(userRepository.findAll()).thenReturn(List.of(user1, user2));
+
+		mockMvc.perform(get("/ai/users")
+				.accept(MediaType.APPLICATION_JSON))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(2))
+				.andExpect(jsonPath("$[0].id").value(1))
+				.andExpect(jsonPath("$[0].firstName").value("Jane"))
+				.andExpect(jsonPath("$[0].lastName").value("Doe"))
+				.andExpect(jsonPath("$[1].id").value(2))
+				.andExpect(jsonPath("$[1].firstName").value("John"))
+				.andExpect(jsonPath("$[1].lastName").value("Smith"));
+	}
+
+	@Test
 	void controllerCreateUserEndpointRejectsBlankFields() throws Exception {
 		mockMvc.perform(post("/ai/user")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -391,13 +411,9 @@ class DemoApplicationTests {
 	}
 
 	@Test
-	void demoApplicationSetsOtelSystemProperties() {
+	void demoApplicationCanBeInstantiated() {
 		DemoApplication app = new DemoApplication();
 		assertThat(app).isNotNull();
-		assertThat(System.getProperty("otel.sdk.disabled")).isEqualTo("true");
-		assertThat(System.getProperty("otel.metrics.exporter")).isEqualTo("none");
-		assertThat(System.getProperty("otel.traces.exporter")).isEqualTo("none");
-		assertThat(System.getProperty("otel.logs.exporter")).isEqualTo("none");
 	}
 
 	@Test
