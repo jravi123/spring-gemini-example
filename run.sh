@@ -14,6 +14,7 @@
 #   6. Grants IAM roles (Vertex AI, Cloud Datastore, Cloud Logging) to the Cloud Run
 #      service account.
 #   7. Builds a container image via Google Cloud Build and deploys it to Cloud Run.
+#   8. Supports deleting a Google Cloud Project via `--delete-project`.
 # ==============================================================================
 
 # Exit immediately if any untested command exits with a non-zero status
@@ -54,6 +55,8 @@ RUN_TESTS=true
 RUN_SCANS=true
 FORCE_REBUILD=false
 ENABLE_APIS_ONLY=false
+DELETE_PROJECT=false
+USED_PROJECT_FLAG=false
 PROJECT_ID_OVERRIDE=""
 BILLING_ACCOUNT_OVERRIDE=""
 
@@ -80,6 +83,7 @@ show_help() {
     echo "  --project <id>          Deploy to a specific GCP Project ID (skips interactive menu)"
     echo "  --billing-account <id>  Link a specific Cloud Billing Account ID if billing is disabled"
     echo "  --apis-only             Only enable required Google Cloud APIs and update application.properties"
+    echo "  --delete-project [<id>] Delete the selected (or specified) Google Cloud Project and exit"
     echo "  --skip-tests            Skip running JUnit unit tests during the Maven build"
     echo "  --skip-scans            Skip running SpotBugs SAST code analysis"
     echo "  --force, --rebuild      Bypass all caches and force a full rebuild and redeploy"
@@ -97,6 +101,7 @@ show_help() {
     echo "  ./run.sh                         # Pick project [1-N], build, test, scan, and deploy"
     echo "  ./run.sh --apis-only             # Pick project [1-N] and enable GCP APIs for local runs"
     echo "  ./run.sh --project my-gcp-proj   # Deploy directly to 'my-gcp-proj'"
+    echo "  ./run.sh --delete-project        # Pick project [1-N] and delete it from GCP"
     echo "  ./run.sh --skip-tests            # Fast build & deploy without running unit tests"
     echo "  ./run.sh --force                 # Force complete rebuild and redeploy from scratch"
     echo "================================================================="
@@ -164,6 +169,7 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         --project|-p)
             if [ -n "$2" ] && [[ "$2" != --* ]]; then
+                USED_PROJECT_FLAG=true
                 PROJECT_ID_OVERRIDE="$2"
                 shift
             else
@@ -192,6 +198,13 @@ while [[ "$#" -gt 0 ]]; do
         --apis-only)
             ENABLE_APIS_ONLY=true
             ;;
+        --delete-project)
+            DELETE_PROJECT=true
+            if [ -n "$2" ] && [[ "$2" != --* ]]; then
+                PROJECT_ID_OVERRIDE="$2"
+                shift
+            fi
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -205,11 +218,18 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
+if [ "$DELETE_PROJECT" = true ] && [ "$USED_PROJECT_FLAG" = true ]; then
+    echo "Error: --project cannot be combined with --delete-project. Use './run.sh --delete-project' or './run.sh --delete-project <id>'."
+    exit 1
+fi
+
 echo "=================================================="
 echo "🤖 Personal Travel Agent - Cloud Run Deployer"
 echo "=================================================="
 echo "Execution Plan:"
-if [ "$ENABLE_APIS_ONLY" = true ]; then
+if [ "$DELETE_PROJECT" = true ]; then
+    echo " - Mode: Delete Google Cloud Project (--delete-project)"
+elif [ "$ENABLE_APIS_ONLY" = true ]; then
     echo " - Mode: Enable Required Google Cloud APIs Only (--apis-only)"
 else
     echo " - Local Build (Tests: $RUN_TESTS, SpotBugs Scan: $RUN_SCANS)"
@@ -224,7 +244,7 @@ echo ""
 # ==============================================================================
 # Fetches all active GCP projects accessible by your `gcloud` account and displays
 # a numbered menu [1-N] (unless `--project <id>` was passed on the command line).
-CURRENT_GCLOUD_PROJECT=$(gcloud config get-value project 2>/dev/null)
+CURRENT_GCLOUD_PROJECT=$(gcloud config get-value project 2>/dev/null || true)
 
 if [ -n "$PROJECT_ID_OVERRIDE" ]; then
     PROJECT_ID="$PROJECT_ID_OVERRIDE"
@@ -273,6 +293,53 @@ if [ -z "$PROJECT_ID" ]; then
     exit 1
 fi
 
+ACTIVE_ACCOUNT=$(gcloud config get-value account 2>/dev/null || true)
+echo "Target GCP Project: $PROJECT_ID"
+echo "Active Account:     $ACTIVE_ACCOUNT"
+echo ""
+
+# If the user ran `./run.sh --delete-project`, confirm and delete the project now
+if [ "$DELETE_PROJECT" = true ]; then
+    if [ "$FORCE_REBUILD" = false ]; then
+        echo "⚠️  WARNING: Deleting GCP project '$PROJECT_ID' will shut down all resources"
+        echo "   (Cloud Run services, Artifact Registry images, Datastore entities, etc.)"
+        echo "   inside the project."
+        read -p "👉 Type '$PROJECT_ID' (or 'yes') to confirm deletion: " confirm_delete
+        confirm_delete=$(echo "$confirm_delete" | xargs)
+        if [ "$confirm_delete" != "$PROJECT_ID" ] && [ "$confirm_delete" != "yes" ] && [ "$confirm_delete" != "y" ]; then
+            echo "🚫 Project deletion cancelled."
+            exit 0
+        fi
+        echo ""
+    fi
+
+    run_step "Delete Google Cloud Project ($PROJECT_ID)" "gcloud projects delete '$PROJECT_ID' --quiet"
+
+    if [ "$LAST_STEP_SKIPPED" = false ]; then
+        if [ "$CURRENT_GCLOUD_PROJECT" = "$PROJECT_ID" ]; then
+            gcloud config unset project >/dev/null 2>&1 || true
+        fi
+        if [ -f "$CONFIG_FILE" ]; then
+            python3 - "$CONFIG_FILE" "$PROJECT_ID" <<'PYEOF' 2>/dev/null || true
+import json, os, sys
+path = os.path.expanduser(sys.argv[1])
+proj = sys.argv[2]
+try:
+    with open(path, 'r') as f:
+        data = json.load(f)
+    if data.get('LAST_DEPLOYED_PROJECT_ID') == proj:
+        os.remove(path)
+except Exception:
+    pass
+PYEOF
+        fi
+        echo "=========================================="
+        echo "🗑️  Project '$PROJECT_ID' Deleted! 🗑️"
+        echo "=========================================="
+    fi
+    exit 0
+fi
+
 # Export the selected project ID across standard Google Cloud and Spring Boot
 # environment variables so all child commands use the chosen project.
 export PROJECT_ID
@@ -310,11 +377,6 @@ with open(path, 'w') as f:
     f.write(content)
 PYEOF
 fi
-
-ACTIVE_ACCOUNT=$(gcloud config get-value account 2>/dev/null)
-echo "Target GCP Project: $PROJECT_ID"
-echo "Active Account:     $ACTIVE_ACCOUNT"
-echo ""
 
 # ==============================================================================
 # SECTION 5: Smart Deployment Cache (~/.travel_agent_demo_deploy.json)
