@@ -7,7 +7,8 @@
 #   2. Syncs that Project ID into src/main/resources/application.properties.
 #   3. Verifies Cloud Billing is enabled on the project (and links an active
 #      billing account automatically if needed).
-#   4. Enables the required Google Cloud APIs (Vertex AI, Datastore, Cloud Run, etc.).
+#   4. Enables the required Google Cloud APIs (Vertex AI, Datastore, Firestore Admin,
+#      Cloud Run, etc.) and ensures the `(default)` database exists in Datastore mode.
 #      - If you pass `--apis-only`, the script stops here so you can run locally
 #        with `./mvnw spring-boot:run`.
 #   5. Runs JUnit unit tests, SpotBugs security scans, and packages the Spring Boot JAR.
@@ -38,6 +39,7 @@ REQUIRED_APIS=(
     "artifactregistry.googleapis.com"  # Artifact Registry (stores built Docker images)
     "aiplatform.googleapis.com"        # Vertex AI (Gemini model inference)
     "datastore.googleapis.com"         # Cloud Datastore (NoSQL database for User entities)
+    "firestore.googleapis.com"         # Firestore Admin API (required to create/verify Datastore-mode databases)
     "cloudbuild.googleapis.com"        # Cloud Build (builds the Docker container in GCP)
     "iam.googleapis.com"               # Identity and Access Management (service account roles)
     "logging.googleapis.com"           # Cloud Logging (application logs)
@@ -653,12 +655,62 @@ enable_required_apis() {
     fi
 }
 
-# If the user ran `./run.sh --apis-only` (for local development), enable APIs and exit now
+# Ensures the `(default)` database exists and is configured in Datastore mode (`DATASTORE_MODE`,
+# NOT `FIRESTORE_NATIVE`) so Spring Data Cloud Datastore can read/write User entities.
+ensure_datastore_database() {
+    local db_list_json=""
+    local list_ok=false
+    local attempt
+
+    for attempt in 1 2 3; do
+        if db_list_json=$(gcloud firestore databases list --project="$PROJECT_ID" --format="json" --quiet 2>/dev/null); then
+            list_ok=true
+            break
+        fi
+        sleep 2
+    done
+
+    if [ "$list_ok" = false ]; then
+        run_step "Inspect Cloud Datastore Database State" "gcloud firestore databases list --project='$PROJECT_ID' --format='json' --quiet"
+        if [ "$LAST_STEP_SKIPPED" = true ]; then
+            return 0
+        fi
+        db_list_json=$(gcloud firestore databases list --project="$PROJECT_ID" --format="json" --quiet)
+    fi
+
+    local db_type
+    db_type=$(DB_LIST_JSON="$db_list_json" python3 -c '
+import json, os
+try:
+    items = json.loads(os.environ.get("DB_LIST_JSON", "[]") or "[]")
+    for item in items:
+        name = str(item.get("name", ""))
+        if name == "(default)" or name.endswith("/databases/(default)"):
+            print(str(item.get("type", "")))
+            break
+except Exception:
+    pass
+')
+
+    if [ -z "$db_type" ]; then
+        echo "ℹ️  No '(default)' database found on $PROJECT_ID. Creating it in Datastore mode ($REGION)..."
+        run_step "Create Cloud Datastore Database (datastore-mode)" "gcloud firestore databases create --database='(default)' --location='$REGION' --type=datastore-mode --project='$PROJECT_ID' --quiet"
+    elif [ "$db_type" = "DATASTORE_MODE" ]; then
+        echo "⚡ Cloud Datastore database ((default), DATASTORE_MODE) is already active for $PROJECT_ID."
+    else
+        echo "⚠️  Existing '(default)' database on $PROJECT_ID is in '$db_type' mode instead of 'DATASTORE_MODE'."
+        run_step "Switch (default) Database to Datastore Mode" "gcloud firestore databases update --database='(default)' --type=datastore-mode --project='$PROJECT_ID' --quiet"
+    fi
+}
+
+# If the user ran `./run.sh --apis-only` (for local development), enable APIs,
+# ensure the Datastore-mode database exists, and exit now.
 if [ "$ENABLE_APIS_ONLY" = true ]; then
-    echo "=== Enabling Required Google Cloud APIs for $PROJECT_ID ==="
+    echo "=== Enabling Required Google Cloud APIs & Datastore Database for $PROJECT_ID ==="
     enable_required_apis
+    ensure_datastore_database
     echo "=========================================="
-    echo "🎉 Google Cloud APIs Ready for $PROJECT_ID! 🎉"
+    echo "🎉 Google Cloud APIs & Datastore Ready for $PROJECT_ID! 🎉"
     echo "=========================================="
     exit 0
 fi
@@ -694,10 +746,11 @@ if [ ! -f "$JAR_SOURCE" ]; then
 fi
 
 # ==============================================================================
-# SECTION 8: Step 2 — Google Cloud APIs & Service Account IAM Permissions
+# SECTION 8: Step 2 — Google Cloud APIs, Datastore Database & IAM Permissions
 # ==============================================================================
-echo "=== Step 2: Google Cloud APIs & IAM Permissions ==="
+echo "=== Step 2: Google Cloud APIs, Datastore Database & IAM Permissions ==="
 enable_required_apis
+ensure_datastore_database
 
 # Look up the default Compute Engine service account used by Cloud Run
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
